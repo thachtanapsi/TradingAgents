@@ -1,0 +1,14 @@
+flowchart TD
+
+    A["Analyst Agent"] --> LLM["LLM Reasoning"]
+
+    LLM --> Q{"Need more data?"}
+
+    Q -- Yes --> TOOL["Tool Call"]
+    TOOL --> DATA["Fetch Market Data"]
+    DATA --> STATE["Update Messages / State"]
+    STATE --> A
+
+    Q -- No --> REPORT["Generate Analyst Report"]
+
+    REPORT --> NEXT["Next Agent"]

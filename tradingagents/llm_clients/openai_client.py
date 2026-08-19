@@ -291,7 +291,8 @@ class OpenAIClient(BaseLLMClient):
             if spec.require_base_url and not base_url:
                 raise ValueError(
                     f"Provider '{self.provider}' requires a base_url. Set it via "
-                    "backend_url / TRADINGAGENTS_LLM_BACKEND_URL to your endpoint, "
+                    "the role's *_LLM_BASE_URL (or legacy "
+                    "TRADINGAGENTS_LLM_BACKEND_URL) to your endpoint, "
                     "e.g. http://localhost:8000/v1 (vLLM) or http://localhost:1234/v1 "
                     "(LM Studio)."
                 )

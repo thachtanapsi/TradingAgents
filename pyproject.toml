@@ -44,9 +44,32 @@ dev = [
 bedrock = [
     "langchain-aws>=1.5.0",
 ]
+gx-postgres = [
+    "psycopg[binary]>=3.2",
+]
+# Encrypted Vietnam social archive support. FireAnt HTTP uses the core
+# `requests` dependency; cryptography remains opt-in while the feature is
+# authorization-locked by default.
+fireant = [
+    "cryptography>=45.0",
+]
+# Encrypted CafeF/VnExpress RSS archive support. Network access continues to
+# use the core ``requests`` dependency; defusedxml rejects hostile entity/XML
+# payloads before any feed item reaches the archive or an LLM prompt.
+vn-media = [
+    "cryptography>=45.0",
+    "defusedxml>=0.7.1",
+]
+# Official NSO SDMX/Excel and SBV public-table parsers. The macro archive stores
+# normalized public observations only and therefore needs no encryption extra.
+vn-macro = [
+    "defusedxml>=0.7.1",
+    "openpyxl>=3.1.5",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"
+tradingagents-gx = "cli.gx_main:app"
 
 [tool.setuptools.packages.find]
 include = ["tradingagents*", "cli*"]

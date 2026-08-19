@@ -213,6 +213,61 @@ class TestCheckpointSignature(unittest.TestCase):
         g.config = {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1}
         self.assertEqual(base, g._run_signature("stock"))
 
+    def test_run_signature_uses_bootstrapped_media_archive_identity(self):
+        from unittest.mock import patch
+
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+        graph = object.__new__(TradingAgentsGraph)
+        graph.selected_analysts = ("news",)
+        graph.config = {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1}
+        profile = {
+            "providers": ["cafef_rss"],
+            "lookback_days": 7,
+            "min_articles": 3,
+            "archive_id": "archive-uuid-after-bootstrap",
+            "archive_schema_version": 1,
+            "alias_policy_version": "vn-media-alias-v1",
+            "prompt_version": "vn-media-v1",
+        }
+
+        with patch(
+            "tradingagents.graph.stage_runner._runtime_media_profile_identity",
+            return_value=profile,
+        ) as runtime_identity:
+            signature = graph._run_signature("stock")
+
+        runtime_identity.assert_called_once_with(graph.config)
+        self.assertIn("media=", signature)
+
+    def test_run_signature_uses_bootstrapped_macro_archive_identity(self):
+        from unittest.mock import patch
+
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+        graph = object.__new__(TradingAgentsGraph)
+        graph.selected_analysts = ("news",)
+        graph.config = {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1}
+        profile = {
+            "provider": "vn_macro",
+            "providers": ["nso_sdmx", "nso_release", "sbv_html"],
+            "lookback_months": 24,
+            "indicator_set_version": "vn-macro-v1",
+            "archive_id": "macro-uuid-after-bootstrap",
+            "archive_schema_version": 1,
+            "strict_point_in_time": True,
+            "prompt_version": "vn-macro-v1",
+        }
+
+        with patch(
+            "tradingagents.graph.stage_runner._runtime_macro_profile_identity",
+            return_value=profile,
+        ) as runtime_identity:
+            signature = graph._run_signature("stock")
+
+        runtime_identity.assert_called_once_with(graph.config)
+        self.assertIn("macro=", signature)
+
 
 if __name__ == "__main__":
     unittest.main()

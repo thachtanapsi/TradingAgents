@@ -17,6 +17,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+from datetime import date, datetime, time, timedelta, timezone
 from urllib.request import Request, urlopen
 
 from .symbol_utils import crypto_base
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
 _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
+_VN_TZ = timezone(timedelta(hours=7))
 
 
 def _stocktwits_symbol(ticker: str) -> str:
@@ -38,7 +40,31 @@ def _stocktwits_symbol(ticker: str) -> str:
     return f"{base}.X" if base else ticker.strip().upper()
 
 
-def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.0) -> str:
+def _social_cutoff(value: str | date | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=_VN_TZ) if value.tzinfo is None else value.astimezone(_VN_TZ)
+    parsed = value if isinstance(value, date) else date.fromisoformat(str(value).strip())
+    return datetime.combine(parsed, time(15, 0), tzinfo=_VN_TZ)
+
+
+def _message_timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        normalized = str(value).strip().replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_stocktwits_messages(
+    ticker: str,
+    limit: int = 30,
+    timeout: float = 10.0,
+    as_of: str | date | datetime | None = None,
+    lookback_days: int = 7,
+) -> str:
     """Fetch recent StockTwits messages for ``ticker`` and return them as a
     formatted plaintext block ready for prompt injection.
 
@@ -60,6 +86,21 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
     messages = data.get("messages", []) if isinstance(data, dict) else []
     if not messages:
         return f"<no StockTwits messages found for ${ticker.upper()}>"
+
+    if as_of is not None:
+        cutoff = _social_cutoff(as_of).astimezone(timezone.utc)
+        window_start = cutoff - timedelta(days=max(0, int(lookback_days)))
+        messages = [
+            message
+            for message in messages
+            if (timestamp := _message_timestamp(message.get("created_at"))) is not None
+            and window_start <= timestamp.astimezone(timezone.utc) <= cutoff
+        ]
+        if not messages:
+            return (
+                "<historical StockTwits unavailable: no eligible timestamped "
+                f"messages on or before {_social_cutoff(as_of).isoformat()}>"
+            )
 
     lines = []
     bullish = bearish = unlabeled = 0
@@ -91,6 +132,6 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
         f"Bullish: {bullish} ({bull_pct}%) · "
         f"Bearish: {bearish} ({bear_pct}%) · "
         f"Unlabeled: {unlabeled} · "
-        f"Total: {total} most-recent messages"
+        f"Total: {total} eligible messages"
     )
     return summary + "\n\n" + "\n".join(lines)

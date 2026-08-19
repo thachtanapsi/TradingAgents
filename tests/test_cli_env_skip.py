@@ -40,6 +40,8 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
             "TRADINGAGENTS_DEEP_THINK_LLM": "kimi-k2.5",
             "TRADINGAGENTS_QUICK_THINK_LLM": "deepseek-v4-pro",
             "TRADINGAGENTS_LLM_BACKEND_URL": "https://opencode.ai/zen/go/v1",
+            "TRADINGAGENTS_QUICK_LLM_API_KEY": "",
+            "TRADINGAGENTS_DEEP_LLM_API_KEY": "",
             "TRADINGAGENTS_OUTPUT_LANGUAGE": "Japanese",
         }
         fake_cfg = dict(m.DEFAULT_CONFIG)
@@ -80,6 +82,61 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
         self.assertEqual(sel["shallow_thinker"], "deepseek-v4-pro")
         self.assertEqual(sel["deep_thinker"], "kimi-k2.5")
         self.assertEqual(sel["output_language"], "Japanese")
+
+    def test_independent_role_profiles_skip_their_prompts(self):
+        import cli.main as m
+
+        env = {
+            "TRADINGAGENTS_QUICK_LLM_PROVIDER": "ollama",
+            "TRADINGAGENTS_QUICK_THINK_LLM": "qwen3:8b",
+            "TRADINGAGENTS_QUICK_LLM_BASE_URL": "http://127.0.0.1:11434/v1",
+            "TRADINGAGENTS_DEEP_LLM_PROVIDER": "openai",
+            "TRADINGAGENTS_DEEP_THINK_LLM": "gpt-5.5",
+            "TRADINGAGENTS_DEEP_LLM_BASE_URL": "https://api.openai.com/v1",
+            "TRADINGAGENTS_OUTPUT_LANGUAGE": "Vietnamese",
+        }
+        fake_cfg = dict(m.DEFAULT_CONFIG)
+        fake_cfg.update(
+            {
+                "quick_llm_provider": "ollama",
+                "quick_think_llm": "qwen3:8b",
+                "quick_llm_base_url": "http://127.0.0.1:11434/v1",
+                "deep_llm_provider": "openai",
+                "deep_think_llm": "gpt-5.5",
+                "deep_llm_base_url": "https://api.openai.com/v1",
+                "output_language": "Vietnamese",
+            }
+        )
+
+        with mock.patch.dict(os.environ, env, clear=False), \
+             mock.patch.object(m, "DEFAULT_CONFIG", fake_cfg), \
+             mock.patch.object(m, "fetch_announcements", return_value=None), \
+             mock.patch.object(m, "display_announcements"), \
+             mock.patch.object(m, "get_ticker", return_value="HPG"), \
+             mock.patch.object(m, "get_analysis_date", return_value="2026-08-17"), \
+             mock.patch.object(m, "select_analysts", return_value=[]), \
+             mock.patch.object(m, "select_research_depth", return_value=1), \
+             mock.patch.object(m, "ensure_api_key") as ensure_key, \
+             mock.patch.object(m, "confirm_ollama_endpoint"), \
+             mock.patch.object(m, "select_llm_provider") as prompt_provider, \
+             mock.patch.object(m, "select_shallow_thinking_agent") as prompt_quick, \
+             mock.patch.object(m, "select_deep_thinking_agent") as prompt_deep:
+            sel = m.get_user_selections()
+
+        prompt_provider.assert_not_called()
+        prompt_quick.assert_not_called()
+        prompt_deep.assert_not_called()
+        self.assertEqual(
+            ensure_key.call_args_list,
+            [
+                mock.call("ollama", role="quick"),
+                mock.call("openai", role="deep"),
+            ],
+        )
+        self.assertEqual(sel["quick_llm_provider"], "ollama")
+        self.assertEqual(sel["quick_llm_base_url"], "http://127.0.0.1:11434/v1")
+        self.assertEqual(sel["deep_llm_provider"], "openai")
+        self.assertEqual(sel["deep_llm_base_url"], "https://api.openai.com/v1")
 
 
 @pytest.mark.unit

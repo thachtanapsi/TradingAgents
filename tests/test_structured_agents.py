@@ -367,6 +367,40 @@ def _structured_sentiment_llm(captured: dict, report: SentimentReport | None = N
 
 @pytest.mark.unit
 class TestSentimentAnalystAgent:
+    @pytest.fixture(autouse=True)
+    def _substantive_sentiment_evidence(self, monkeypatch):
+        """Keep structured-output tests focused on LLM/render behavior.
+
+        Availability semantics (including the no-LLM path) have dedicated v2
+        tests; these legacy tests need deterministic substantive inputs rather
+        than depending on live public endpoints.
+        """
+        import tradingagents.agents.analysts.sentiment_analyst as sentiment
+
+        monkeypatch.setattr(
+            sentiment,
+            "_load_media_tone",
+            lambda *a, **k: sentiment._LaneEvidence(
+                status="available",
+                provider="test_news",
+                block="## NVDA news\n\n### A substantive headline",
+                sample_size=1,
+            ),
+        )
+        monkeypatch.setattr(
+            sentiment,
+            "fetch_stocktwits_messages",
+            lambda *a, **k: (
+                "Bullish: 1 (100%) · Bearish: 0 (0%) · Unlabeled: 0 · "
+                "Total: 1 eligible messages\n\n[2026-01-15 · @user · Bullish] thesis"
+            ),
+        )
+        monkeypatch.setattr(
+            sentiment,
+            "fetch_reddit_posts",
+            lambda *a, **k: "r/stocks — 1 recent posts mentioning NVDA:\n  thesis",
+        )
+
     def test_structured_path_produces_rendered_markdown(self):
         captured = {}
         report = SentimentReport(
@@ -396,7 +430,10 @@ class TestSentimentAnalystAgent:
         llm = MagicMock()
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain)
-        assert create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"] == plain
+        result = create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"]
+        assert "**Overall Sentiment:** **Not scored**" in result
+        assert "single model response did not satisfy" in result
+        llm.invoke.assert_called_once()
 
     def test_falls_back_to_freetext_when_structured_call_fails(self):
         plain = "Fallback free-text sentiment."
@@ -405,4 +442,7 @@ class TestSentimentAnalystAgent:
         llm = MagicMock()
         llm.with_structured_output.return_value = structured
         llm.invoke.return_value = MagicMock(content=plain)
-        assert create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"] == plain
+        result = create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"]
+        assert "**Overall Sentiment:** **Not scored**" in result
+        structured.invoke.assert_called_once()
+        llm.invoke.assert_not_called()

@@ -1,0 +1,35 @@
+flowchart LR
+
+    AGENT["Trading Agent"]
+
+    AGENT --> TOOL["LangChain Tool"]
+
+    TOOL --> ROUTER["route_to_vendor()"]
+
+    ROUTER --> STOCK["Stock Data"]
+    ROUTER --> TECH["Technical Indicators"]
+    ROUTER --> FUND["Fundamentals"]
+    ROUTER --> NEWS["News"]
+    ROUTER --> MACRO["Macro"]
+    ROUTER --> VNMACRO["Vietnam Macro"]
+    ROUTER --> PRED["Prediction Markets"]
+
+    STOCK --> YF["Yahoo Finance"]
+    STOCK --> AV["Alpha Vantage"]
+
+    TECH --> YF
+    TECH --> AV
+
+    FUND --> YF
+    FUND --> AV
+
+    NEWS --> YF
+    NEWS --> AV
+
+    MACRO --> FRED["FRED"]
+
+    VNMACRO --> MACROARCHIVE["SQLite strict-PIT archive"]
+    MACROARCHIVE --> NSO["NSO / NSDP"]
+    MACROARCHIVE --> SBV["SBV"]
+
+    PRED --> POLY["Polymarket"]

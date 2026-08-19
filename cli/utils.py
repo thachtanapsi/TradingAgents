@@ -71,6 +71,15 @@ def normalize_ticker_symbol(ticker: str) -> str:
     plain upper-case if the data layer is unavailable.
     """
     try:
+        from tradingagents.dataflows.config import get_config
+
+        vendor = get_config().get("data_vendors", {}).get("core_stock_apis", "")
+        if "gx_market_info" in vendor.split(","):
+            value = ticker.strip().upper()
+            if ":" in value:
+                value = value.split(":", 1)[1]
+            return value[:-3] if value.endswith(".VN") else value
+
         from tradingagents.dataflows.symbol_utils import normalize_symbol
 
         return normalize_symbol(ticker)
@@ -368,11 +377,9 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
 
 def provider_default_url(provider_key: str) -> str | None:
     """Return the default backend URL for a provider key, or None if unknown."""
-    key = provider_key.lower()
-    for _, pk, url in _llm_provider_table():
-        if pk == key:
-            return url
-    return None
+    from tradingagents.llm_clients.profiles import provider_default_base_url
+
+    return provider_default_base_url(provider_key)
 
 
 def resolve_backend_url(
@@ -600,19 +607,27 @@ def confirm_ollama_endpoint(url: str) -> None:
         )
 
 
-def ensure_api_key(provider: str) -> str | None:
+def ensure_api_key(provider: str, *, role: str | None = None) -> str | None:
     """Make sure the API key for `provider` is available in the environment.
 
-    If the env var is already set, returns its value untouched. Otherwise
-    interactively prompts the user, persists the value to the project's
-    .env file via python-dotenv's set_key (creating .env if needed), and
-    exports it into os.environ so the current process picks it up.
+    A non-empty role key wins, then the provider-standard key is reused.
+    Otherwise the prompt stores the key for that role. Legacy callers without
+    ``role`` retain the provider-standard behavior.
 
     Returns None for providers that do not require a key (e.g. ollama)
     and for providers not found in the canonical mapping.
     """
-    env_var = get_api_key_env(provider)
-    if env_var is None:
+    provider_env_var = get_api_key_env(provider)
+    role_env_var = (
+        f"TRADINGAGENTS_{role.upper()}_LLM_API_KEY"
+        if role in {"quick", "deep"}
+        else None
+    )
+    if provider_env_var is None and provider.lower() == "bedrock":
+        return None
+    if provider_env_var is None and provider.lower() != "ollama":
+        return None
+    if provider_env_var is None and role_env_var is None:
         return None  # ollama / unknown — no key check possible
 
     # Key-optional providers (generic OpenAI-compatible / local servers) read the
@@ -620,11 +635,19 @@ def ensure_api_key(provider: str) -> str | None:
     from tradingagents.llm_clients.openai_client import OPENAI_COMPATIBLE_PROVIDERS
     spec = OPENAI_COMPATIBLE_PROVIDERS.get(provider.lower())
     if spec is not None and spec.key_optional:
-        return os.environ.get(env_var)
+        return (
+            os.environ.get(role_env_var) if role_env_var else None
+        ) or (os.environ.get(provider_env_var) if provider_env_var else None)
 
-    existing = os.environ.get(env_var)
+    existing = (
+        os.environ.get(role_env_var) if role_env_var else None
+    ) or (os.environ.get(provider_env_var) if provider_env_var else None)
     if existing:
         return existing
+
+    env_var = role_env_var or provider_env_var
+    if env_var is None:
+        return None
 
     console.print(
         f"\n[yellow]{env_var} is not set in your environment.[/yellow]"

@@ -71,6 +71,24 @@ def test_offset_aware_timestamp_is_converted_not_truncated():
 
 
 @pytest.mark.unit
+def test_exact_live_cutoff_excludes_article_one_second_later():
+    start, _ = ynews._parse_window_bound("2026-08-12", end=False)
+    cutoff, date_only = ynews._parse_window_bound(
+        "2026-08-19T16:05:31+07:00", end=True
+    )
+    at_cutoff = datetime.fromisoformat("2026-08-19T16:05:31+07:00")
+    after_cutoff = datetime.fromisoformat("2026-08-19T16:05:32+07:00")
+
+    assert date_only is False
+    assert ynews._in_news_window(
+        at_cutoff, start, cutoff, date_only_end=date_only
+    )
+    assert not ynews._in_news_window(
+        after_cutoff, start, cutoff, date_only_end=date_only
+    )
+
+
+@pytest.mark.unit
 def test_global_news_future_flat_article_excluded(monkeypatch):
     # #1007: a flat, future-dated global article must not appear in a historical run.
     future_article = {"title": "FUTURE EVENT", "publisher": "P", "link": "l",

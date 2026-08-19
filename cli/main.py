@@ -621,75 +621,100 @@ def get_user_selections():
         )
         selected_research_depth = select_research_depth()
 
-    # Step 6: LLM Provider (skipped when set via TRADINGAGENTS_LLM_PROVIDER).
-    # The backend URL comes from TRADINGAGENTS_LLM_BACKEND_URL when set,
-    # otherwise the provider's default endpoint — the same value the menu
-    # would have picked.
-    provider_from_env = bool(os.environ.get("TRADINGAGENTS_LLM_PROVIDER"))
-    if provider_from_env:
-        selected_llm_provider = DEFAULT_CONFIG["llm_provider"].lower()
-        backend_url = resolve_backend_url(
-            selected_llm_provider, env_url=DEFAULT_CONFIG["backend_url"]
+    # Steps 6-7: Quick and Deep are independent connection profiles. A role
+    # provider falls back to the legacy shared provider, while a role base URL
+    # falls back to the legacy shared backend URL.
+    checked_keys: set[tuple[str, str | None]] = set()
+
+    def select_runtime_profile(role: str) -> tuple[str, str | None, str, bool]:
+        role_upper = role.upper()
+        provider_env = os.environ.get(f"TRADINGAGENTS_{role_upper}_LLM_PROVIDER")
+        legacy_provider_env = os.environ.get("TRADINGAGENTS_LLM_PROVIDER")
+        provider_from_env = bool(provider_env or legacy_provider_env)
+        configured_provider = (
+            DEFAULT_CONFIG.get(f"{role}_llm_provider")
+            or DEFAULT_CONFIG.get("llm_provider")
+            or "openai"
         )
-        console.print(f"[green]✓ LLM provider from environment:[/green] {selected_llm_provider}")
-        console.print(f"[green]✓ Backend URL:[/green] {backend_url}")
-        # Still confirm/persist the API key so the run doesn't fail later.
-        ensure_api_key(selected_llm_provider)
-    else:
-        console.print(
-            create_question_box(
-                "Step 6: LLM Provider", "Select your LLM provider"
+        configured_url = DEFAULT_CONFIG.get(f"{role}_llm_base_url") or DEFAULT_CONFIG.get(
+            "backend_url"
+        )
+
+        if provider_from_env:
+            provider = str(configured_provider).lower()
+            backend = resolve_backend_url(provider, env_url=configured_url)
+            console.print(
+                f"[green]✓ {role.title()} LLM provider from environment:[/green] {provider}"
             )
-        )
-        selected_llm_provider, backend_url = select_llm_provider()
-
-        # Providers with regional endpoints prompt for the region as a secondary
-        # step so the main dropdown stays clean (mainland China and international
-        # accounts cannot share API keys).
-        if selected_llm_provider == "qwen":
-            selected_llm_provider, backend_url = ask_qwen_region()
-        elif selected_llm_provider == "minimax":
-            selected_llm_provider, backend_url = ask_minimax_region()
-        elif selected_llm_provider == "glm":
-            selected_llm_provider, backend_url = ask_glm_region()
-
-        # Honor an explicit env backend URL even when the provider was chosen
-        # interactively, so it isn't overwritten by the menu default (#978).
-        backend_url = resolve_backend_url(
-            selected_llm_provider, backend_url, env_url=DEFAULT_CONFIG["backend_url"]
-        )
-
-        # The generic OpenAI-compatible endpoint has no default; ask for it if
-        # neither the menu nor the environment supplied one.
-        if selected_llm_provider == "openai_compatible" and not backend_url:
-            backend_url = prompt_openai_compatible_url()
-
-        # For Ollama, surface the resolved endpoint (OLLAMA_BASE_URL vs default)
-        # before model selection so it's obvious where we're connecting.
-        if selected_llm_provider == "ollama":
-            confirm_ollama_endpoint(backend_url)
-
-        # Confirm the provider's API key is present; prompt the user to paste
-        # one and persist it to .env if it's missing, so the analysis run
-        # doesn't fail later at the first API call.
-        ensure_api_key(selected_llm_provider)
-
-    # Step 7: Thinking agents (skipped when either model is set via environment)
-    if os.environ.get("TRADINGAGENTS_QUICK_THINK_LLM") or os.environ.get("TRADINGAGENTS_DEEP_THINK_LLM"):
-        selected_shallow_thinker = DEFAULT_CONFIG["quick_think_llm"]
-        selected_deep_thinker = DEFAULT_CONFIG["deep_think_llm"]
-        console.print(
-            f"[green]✓ Thinking agents from environment:[/green] "
-            f"quick={selected_shallow_thinker}, deep={selected_deep_thinker}"
-        )
-    else:
-        console.print(
-            create_question_box(
-                "Step 7: Thinking Agents", "Select your thinking agents for analysis"
+            console.print(
+                f"[green]✓ {role.title()} base URL:[/green] {backend or 'provider default'}"
             )
+        else:
+            console.print(
+                create_question_box(
+                    f"Step 6: {role.title()} LLM Provider",
+                    f"Select the provider used by the {role.title()} profile",
+                )
+            )
+            provider, backend = select_llm_provider()
+            if provider == "qwen":
+                provider, backend = ask_qwen_region()
+            elif provider == "minimax":
+                provider, backend = ask_minimax_region()
+            elif provider == "glm":
+                provider, backend = ask_glm_region()
+            backend = resolve_backend_url(provider, backend, env_url=configured_url)
+            if provider == "openai_compatible" and not backend:
+                backend = prompt_openai_compatible_url()
+
+        if provider == "ollama":
+            confirm_ollama_endpoint(backend)
+
+        # New role profiles persist a role key only when no provider key exists.
+        # A pure legacy profile retains the old provider-key prompt once.
+        role_profile_env = bool(
+            provider_env
+            or os.environ.get(f"TRADINGAGENTS_{role_upper}_LLM_BASE_URL")
+            or os.environ.get(f"TRADINGAGENTS_{role_upper}_LLM_API_KEY")
         )
-        selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
-        selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
+        key_role = role if role_profile_env or not provider_from_env else None
+        key_identity = (provider, key_role)
+        if key_identity not in checked_keys:
+            ensure_api_key(provider, role=key_role)
+            checked_keys.add(key_identity)
+
+        model_env = os.environ.get(f"TRADINGAGENTS_{role_upper}_THINK_LLM")
+        if model_env or provider_from_env:
+            model = str(DEFAULT_CONFIG[f"{role}_think_llm"])
+            console.print(
+                f"[green]✓ {role.title()} model from environment/default:[/green] {model}"
+            )
+        else:
+            console.print(
+                create_question_box(
+                    f"Step 7: {role.title()} Thinking Agent",
+                    f"Select the model for the {role.title()} profile",
+                )
+            )
+            model = (
+                select_shallow_thinking_agent(provider)
+                if role == "quick"
+                else select_deep_thinking_agent(provider)
+            )
+        return provider.lower(), backend, model, provider_from_env
+
+    (
+        quick_llm_provider,
+        quick_llm_base_url,
+        selected_shallow_thinker,
+        quick_provider_from_env,
+    ) = select_runtime_profile("quick")
+    (
+        deep_llm_provider,
+        deep_llm_base_url,
+        selected_deep_thinker,
+        deep_provider_from_env,
+    ) = select_runtime_profile("deep")
 
     # Step 8: Provider-specific reasoning/thinking configuration. Each knob is
     # settable via its TRADINGAGENTS_* env var; when that var is set (or the
@@ -700,29 +725,39 @@ def get_user_selections():
     reasoning_effort = None
     anthropic_effort = None
 
-    provider_lower = selected_llm_provider.lower()
-    if provider_from_env:
-        thinking_level = DEFAULT_CONFIG["google_thinking_level"]
-        reasoning_effort = DEFAULT_CONFIG["openai_reasoning_effort"]
-        anthropic_effort = DEFAULT_CONFIG["anthropic_effort"]
-    elif provider_lower == "google":
+    selected_providers = {quick_llm_provider, deep_llm_provider}
+    profile_sources = (
+        (quick_llm_provider, quick_provider_from_env),
+        (deep_llm_provider, deep_provider_from_env),
+    )
+
+    def provider_fully_from_env(provider: str) -> bool:
+        return all(from_env for selected, from_env in profile_sources if selected == provider)
+
+    if "google" in selected_providers and not provider_fully_from_env("google"):
         thinking_level = thinking_value_or_prompt(
             "TRADINGAGENTS_GOOGLE_THINKING_LEVEL", "google_thinking_level",
             "Gemini thinking mode", "Step 8: Thinking Mode",
             "Configure Gemini thinking mode", ask_gemini_thinking_config,
         )
-    elif provider_lower == "openai":
+    else:
+        thinking_level = DEFAULT_CONFIG["google_thinking_level"]
+    if "openai" in selected_providers and not provider_fully_from_env("openai"):
         reasoning_effort = thinking_value_or_prompt(
             "TRADINGAGENTS_OPENAI_REASONING_EFFORT", "openai_reasoning_effort",
             "Reasoning effort", "Step 8: Reasoning Effort",
             "Configure OpenAI reasoning effort level", ask_openai_reasoning_effort,
         )
-    elif provider_lower == "anthropic":
+    else:
+        reasoning_effort = DEFAULT_CONFIG["openai_reasoning_effort"]
+    if "anthropic" in selected_providers and not provider_fully_from_env("anthropic"):
         anthropic_effort = thinking_value_or_prompt(
             "TRADINGAGENTS_ANTHROPIC_EFFORT", "anthropic_effort",
             "Claude effort", "Step 8: Effort Level",
             "Configure Claude effort level", ask_anthropic_effort,
         )
+    else:
+        anthropic_effort = DEFAULT_CONFIG["anthropic_effort"]
 
     return {
         "ticker": selected_ticker,
@@ -730,8 +765,14 @@ def get_user_selections():
         "analysis_date": analysis_date,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
-        "llm_provider": selected_llm_provider.lower(),
-        "backend_url": backend_url,
+        # Legacy mirrors Quick so older extensions keep the evidence-processing
+        # profile; the graph itself consumes the explicit role fields below.
+        "llm_provider": quick_llm_provider,
+        "backend_url": quick_llm_base_url,
+        "quick_llm_provider": quick_llm_provider,
+        "quick_llm_base_url": quick_llm_base_url,
+        "deep_llm_provider": deep_llm_provider,
+        "deep_llm_base_url": deep_llm_base_url,
         "shallow_thinker": selected_shallow_thinker,
         "deep_thinker": selected_deep_thinker,
         "google_thinking_level": thinking_level,
@@ -987,8 +1028,26 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
         config["max_risk_discuss_rounds"] = selections["research_depth"]
     config["quick_think_llm"] = selections["shallow_thinker"]
     config["deep_think_llm"] = selections["deep_thinker"]
-    config["backend_url"] = selections["backend_url"]
-    config["llm_provider"] = selections["llm_provider"].lower()
+    quick_provider = selections.get(
+        "quick_llm_provider", selections["llm_provider"]
+    ).lower()
+    deep_provider = selections.get(
+        "deep_llm_provider", selections["llm_provider"]
+    ).lower()
+    quick_base_url = selections.get(
+        "quick_llm_base_url", selections.get("backend_url")
+    )
+    deep_base_url = selections.get(
+        "deep_llm_base_url", selections.get("backend_url")
+    )
+    config["quick_llm_provider"] = quick_provider
+    config["quick_llm_base_url"] = quick_base_url
+    config["deep_llm_provider"] = deep_provider
+    config["deep_llm_base_url"] = deep_base_url
+    # Compatibility mirrors point at Quick, the role used by analysts and raw
+    # FireAnt/CafeF/VnExpress evidence policy.
+    config["llm_provider"] = quick_provider
+    config["backend_url"] = quick_base_url
     # Provider-specific thinking configuration
     config["google_thinking_level"] = selections.get("google_thinking_level")
     config["openai_reasoning_effort"] = selections.get("openai_reasoning_effort")

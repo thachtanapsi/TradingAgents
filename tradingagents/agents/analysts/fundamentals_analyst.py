@@ -8,11 +8,12 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
+from tradingagents.agents.utils.analysis_context import analysis_prompt_cutoff
 
 
 def create_fundamentals_analyst(llm):
     def fundamentals_analyst_node(state):
-        current_date = state["trade_date"]
+        current_date, cutoff_instruction = analysis_prompt_cutoff(state)
         instrument_context = get_instrument_context_from_state(state)
 
         tools = [
@@ -40,7 +41,8 @@ def create_fundamentals_analyst(llm):
                     " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
                     " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
                     " You have access to the following tools: {tool_names}."
-                    " Today's date is {current_date}; treat it as 'now' for all analysis and tool-call date ranges. {instrument_context}\n"
+                    " The immutable analysis cutoff is {current_date}; treat it as 'now' for all analysis and tool-call date ranges."
+                    " {cutoff_instruction} {instrument_context}\n"
                     "{system_message}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
@@ -50,6 +52,7 @@ def create_fundamentals_analyst(llm):
         prompt = prompt.partial(system_message=system_message)
         prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
         prompt = prompt.partial(current_date=current_date)
+        prompt = prompt.partial(cutoff_instruction=cutoff_instruction)
         prompt = prompt.partial(instrument_context=instrument_context)
 
         chain = prompt | llm.bind_tools(tools)

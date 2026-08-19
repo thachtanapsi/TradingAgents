@@ -1,7 +1,7 @@
 """yfinance-based news data fetching functions."""
 
 import contextlib
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
@@ -69,18 +69,50 @@ def _extract_article_data(article: dict) -> dict:
         }
 
 
-def _in_news_window(pub_date, start_dt, end_dt) -> bool:
-    """Whether an article belongs in the half-open window ``[start, end + 1 day)``.
+def _parse_window_bound(value: str, *, end: bool) -> tuple[datetime, bool]:
+    """Parse date-only or exact ISO bounds without discarding an offset."""
+    text = str(value).strip()
+    try:
+        parsed_date = date.fromisoformat(text)
+    except ValueError:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return _as_utc(parsed), False
+    parsed = datetime.combine(parsed_date, datetime.min.time(), tzinfo=timezone.utc)
+    return parsed, end
 
-    Every operand is normalized to UTC, and the upper bound is exclusive so an
-    article stamped exactly at midnight after ``end_dt`` cannot leak into a
-    historical run (#1126). An undated article is kept only when the window
-    reaches the present (live run) — in a historical/backtest window it's
-    excluded, since we can't prove it isn't future news (#992/#1007).
+
+def _pit_notice(value: str) -> str:
+    """Label live, non-archived feeds honestly in rendered evidence."""
+    try:
+        date.fromisoformat(str(value).strip())
+    except ValueError:
+        return (
+            "Point-in-time quality: current_only/partial. Publication timestamps "
+            "are capped at the frozen cutoff, but Yahoo is a live non-archived "
+            "feed and historical selection completeness cannot be proven.\n\n"
+        )
+    return ""
+
+
+def _in_news_window(
+    pub_date,
+    start_dt,
+    end_dt,
+    *,
+    date_only_end: bool = True,
+) -> bool:
+    """Whether an article belongs in the requested point-in-time window.
+
+    Date-only analysis retains the historical half-open ``[start, next-day)``
+    behavior.  Live mode supplies an exact aware timestamp and uses an
+    inclusive ``published_at <= cutoff`` comparison.
     """
     end = _as_utc(end_dt)
     if pub_date is not None:
-        return _as_utc(start_dt) <= _as_utc(pub_date) < end + timedelta(days=1)
+        published = _as_utc(pub_date)
+        if date_only_end:
+            return _as_utc(start_dt) <= published < end + timedelta(days=1)
+        return _as_utc(start_dt) <= published <= end
     return end >= datetime.now(timezone.utc) - timedelta(days=1)
 
 
@@ -114,8 +146,8 @@ def get_news_yfinance(
             return f"No news found for {ticker}{resolved}"
 
         # Parse date range for filtering
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        start_dt, _ = _parse_window_bound(start_date, end=False)
+        end_dt, date_only_end = _parse_window_bound(end_date, end=True)
 
         news_str = ""
         filtered_count = 0
@@ -124,7 +156,12 @@ def get_news_yfinance(
             data = _extract_article_data(article)
 
             # Keep only articles within the requested window (look-ahead safe).
-            if not _in_news_window(data["pub_date"], start_dt, end_dt):
+            if not _in_news_window(
+                data["pub_date"],
+                start_dt,
+                end_dt,
+                date_only_end=date_only_end,
+            ):
                 continue
 
             news_str += f"### {data['title']} (source: {data['publisher']})\n"
@@ -138,7 +175,10 @@ def get_news_yfinance(
         if filtered_count == 0:
             return f"No news found for {ticker}{resolved} between {start_date} and {end_date}"
 
-        return f"## {ticker}{resolved} News, from {start_date} to {end_date}:\n\n{news_str}"
+        return (
+            f"## {ticker}{resolved} News, from {start_date} to {end_date}:\n\n"
+            f"{_pit_notice(end_date)}{news_str}"
+        )
 
     except Exception as e:
         return f"Error fetching news for {ticker}: {str(e)}"
@@ -201,7 +241,7 @@ def get_global_news_yfinance(
             return f"No global news found for {curr_date}"
 
         # Calculate date range
-        curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+        curr_dt, date_only_end = _parse_window_bound(curr_date, end=True)
         start_dt = curr_dt - relativedelta(days=look_back_days)
         start_date = start_dt.strftime("%Y-%m-%d")
 
@@ -211,7 +251,12 @@ def get_global_news_yfinance(
             # Extract uniformly (flat + nested) and apply the same look-ahead-safe
             # window filter, so flat articles can't leak future news (#1007).
             data = _extract_article_data(article)
-            if not _in_news_window(data["pub_date"], start_dt, curr_dt):
+            if not _in_news_window(
+                data["pub_date"],
+                start_dt,
+                curr_dt,
+                date_only_end=date_only_end,
+            ):
                 continue
             news_str += f"### {data['title']} (source: {data['publisher']})\n"
             if data["summary"]:
@@ -226,7 +271,10 @@ def get_global_news_yfinance(
         if kept == 0:
             return f"No global news found between {start_date} and {curr_date}"
 
-        return f"## Global Market News, from {start_date} to {curr_date}:\n\n{news_str}"
+        return (
+            f"## Global Market News, from {start_date} to {curr_date}:\n\n"
+            f"{_pit_notice(curr_date)}{news_str}"
+        )
 
     except Exception as e:
         return f"Error fetching global news: {str(e)}"

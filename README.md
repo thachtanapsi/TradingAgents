@@ -151,9 +151,15 @@ For Azure OpenAI, copy `.env.enterprise.example` to `.env.enterprise` and fill i
 
 For AWS Bedrock, install the extra with `pip install ".[bedrock]"`, set `llm_provider: "bedrock"`, configure AWS credentials (environment variables, `~/.aws/credentials`, or an IAM role) and `AWS_DEFAULT_REGION`, and use a Bedrock model ID, e.g. `us.anthropic.claude-opus-4-8-v1:0`.
 
-For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
+Quick and Deep can use independent providers, models, base URLs, and optional
+role keys. Configure `quick_llm_provider` / `quick_llm_base_url` and
+`deep_llm_provider` / `deep_llm_base_url`; role keys fall back to the normal
+provider key. The legacy `llm_provider` / `backend_url` values remain shared
+fallbacks.
 
-For any other OpenAI-compatible server (vLLM, LM Studio, llama.cpp, or a custom relay), use `llm_provider: "openai_compatible"` and set the endpoint via `backend_url` (or `TRADINGAGENTS_LLM_BACKEND_URL`), e.g. `http://localhost:8000/v1` for vLLM or `http://localhost:1234/v1` for LM Studio. The model is whatever your server serves. No key is needed for local servers; set `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires one.
+For local models, configure the desired role with provider `ollama`. The default endpoint is `http://localhost:11434/v1`; set the role base URL (or fallback `OLLAMA_BASE_URL`) to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
+
+For any other OpenAI-compatible server (vLLM, LM Studio, llama.cpp, or a custom relay), set that role's provider to `openai_compatible` and its `*_LLM_BASE_URL` to the endpoint, e.g. `http://localhost:8000/v1` for vLLM or `http://localhost:1234/v1` for LM Studio. The model is whatever your server serves. No key is needed for local servers; use the role key or `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires one.
 
 Alternatively, copy `.env.example` to `.env` and fill in your keys:
 ```bash
@@ -267,7 +273,7 @@ TradingAgents is LLM-driven, so two runs of the same ticker and date can differ.
 
 Language model sampling is non-deterministic. Even at a fixed temperature, providers do not guarantee byte-identical output across calls, and reasoning models (the default GPT-5.x family, and any thinking-mode model) vary the most because their internal reasoning is itself sampled.
 
-Live data moves. News, StockTwits, and Reddit return different content as time passes, so a run today sees different inputs than a run last week even for the same historical trade date. Pin the analysis date to hold the price and indicator window fixed, but the social and news sources still reflect "now".
+Live data moves. News, StockTwits, and Reddit return different content as time passes, so a run today sees different inputs than a run last week even for the same historical trade date. Pin the analysis date to hold the price and indicator window fixed, but these upstream social/news sources still reflect "now". The optional GX/FireAnt profile is different: it uses an encrypted point-in-time archive and completed daily snapshots, while still reporting FireAnt coverage as proxy/partial rather than claiming perfect historical completeness. Its optional CafeF/VnExpress RSS lane is also archive-only during analysis and remains authorization-locked by default; see [Vietnam editorial media](docs/vietnam-editorial-media.md). GX News can additionally use the strict point-in-time NSO/SBV archive documented in [Vietnam macro evidence](docs/vietnam-macro.md); that path is separate from upstream FRED.
 
 To reduce variation you can lower the sampling temperature. Set `temperature` in your config (or `TRADINGAGENTS_TEMPERATURE` in `.env`); lower values make models that honor it more repeatable. The current curated models are reasoning-first and largely ignore temperature, so for tighter reproducibility use a non-reasoning model, which you can set explicitly via the Custom model ID option.
 

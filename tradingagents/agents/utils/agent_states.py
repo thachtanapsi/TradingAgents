@@ -49,14 +49,42 @@ class AgentState(MessagesState):
     asset_type: Annotated[str, "Asset type under analysis such as stock or crypto"]
     instrument_context: Annotated[str, "Deterministic ticker identity resolved at run start"]
     trade_date: Annotated[str, "What date we are trading at"]
+    analysis_mode: Annotated[
+        str, "Immutable analysis mode injected from the durable run identity"
+    ]
+    analysis_cutoff: Annotated[
+        str, "Immutable timezone-aware point-in-time cutoff for all evidence"
+    ]
+    verified_market_snapshot: Annotated[
+        str,
+        "Execution-only deterministic OHLCV/indicator snapshot for live market analysis",
+    ]
+    media_profile: Annotated[
+        dict, "Immutable non-secret Vietnam editorial media run profile"
+    ]
+    media_profile_fingerprint: Annotated[
+        str, "Stable fingerprint binding media evidence and snapshots"
+    ]
+    macro_profile: Annotated[
+        dict, "Immutable non-secret Vietnam macro run profile"
+    ]
+    macro_profile_fingerprint: Annotated[
+        str, "Stable fingerprint binding Vietnam macro evidence"
+    ]
 
     sender: Annotated[str, "Agent that sent this message"]
 
     # research step
     market_report: Annotated[str, "Report from the Market Analyst"]
     sentiment_report: Annotated[str, "Report from the Sentiment Analyst"]
+    sentiment_source_metadata: Annotated[
+        dict, "Non-sensitive provenance and coverage for sentiment evidence lanes"
+    ]
     news_report: Annotated[
         str, "Report from the News Researcher of current world affairs"
+    ]
+    news_source_metadata: Annotated[
+        dict, "Non-sensitive provenance and coverage for news evidence lanes"
     ]
     fundamentals_report: Annotated[str, "Report from the Fundamentals Researcher"]
 

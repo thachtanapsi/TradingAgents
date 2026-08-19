@@ -25,7 +25,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -47,6 +47,7 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 # discussion. wallstreetbets has the most volume but most noise; stocks /
 # investing trend more measured. Caller can override.
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
+_VN_TZ = timezone(timedelta(hours=7))
 
 
 def _search_qs(ticker: str, limit: int) -> str:
@@ -68,6 +69,13 @@ def _iso_to_timestamp(iso_str: str | None) -> float | None:
         return datetime.fromisoformat(normalized).timestamp()
     except (ValueError, TypeError):
         return None
+
+
+def _social_cutoff(value: str | date | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=_VN_TZ) if value.tzinfo is None else value.astimezone(_VN_TZ)
+    parsed = value if isinstance(value, date) else date.fromisoformat(str(value).strip())
+    return datetime.combine(parsed, datetime_time(15, 0), tzinfo=_VN_TZ)
 
 
 def _strip_html(content: str) -> str:
@@ -194,6 +202,8 @@ def fetch_reddit_posts(
     limit_per_sub: int = 5,
     timeout: float = 10.0,
     inter_request_delay: float = 1.0,
+    as_of: str | date | datetime | None = None,
+    lookback_days: int = 7,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
@@ -205,12 +215,27 @@ def fetch_reddit_posts(
     # Crypto reaches us as a Yahoo pair (BTC-USD); search Reddit for the base
     # ("BTC") so the query actually matches discussion instead of near-nothing.
     ticker = crypto_base(ticker) or ticker
+    cutoff_timestamp = None
+    window_start_timestamp = None
+    if as_of is not None:
+        cutoff = _social_cutoff(as_of).astimezone(timezone.utc)
+        cutoff_timestamp = cutoff.timestamp()
+        window_start_timestamp = (
+            cutoff - timedelta(days=max(0, int(lookback_days)))
+        ).timestamp()
     blocks = []
     total_posts = 0
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
         posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        if cutoff_timestamp is not None and window_start_timestamp is not None:
+            posts = [
+                post
+                for post in posts
+                if isinstance(post.get("created_utc"), (int, float))
+                and window_start_timestamp <= post["created_utc"] <= cutoff_timestamp
+            ]
         total_posts += len(posts)
         if not posts:
             blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
@@ -243,6 +268,11 @@ def fetch_reddit_posts(
         blocks.append("\n".join(lines))
 
     if total_posts == 0:
+        if as_of is not None:
+            return (
+                "<historical Reddit unavailable: no eligible timestamped posts "
+                f"on or before {_social_cutoff(as_of).isoformat()}>"
+            )
         return (
             f"<no Reddit posts found mentioning {ticker.upper()} across "
             f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"

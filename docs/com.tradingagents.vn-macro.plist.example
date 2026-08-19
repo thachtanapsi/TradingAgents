@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradingagents.vn-macro</string>
+  <key>WorkingDirectory</key>
+  <string>/ABSOLUTE/PATH/TO/TradingAgents</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/ABSOLUTE/PATH/TO/TradingAgents/.venv/bin/tradingagents-gx</string>
+    <string>--env-file</string>
+    <string>/ABSOLUTE/PATH/TO/TradingAgents/.env.postgres-hosted</string>
+    <string>macro</string>
+    <string>collect</string>
+    <string>--once</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>8</integer>
+      <key>Minute</key>
+      <integer>15</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>16</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+    </dict>
+  </array>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/tmp/tradingagents-vn-macro.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/tradingagents-vn-macro.err.log</string>
+</dict>
+</plist>

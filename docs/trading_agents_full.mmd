@@ -1,0 +1,146 @@
+flowchart TD
+
+    %% =========================
+    %% INPUT LAYER
+    %% =========================
+
+    U["User / CLI<br/>Ticker + Trade Date + Config"]
+
+    U --> MAIN["main.py / cli/main.py"]
+    MAIN --> TAG["TradingAgentsGraph<br/>tradingagents/graph/trading_graph.py"]
+
+    %% =========================
+    %% CONFIG + INFRA
+    %% =========================
+
+    CFG["default_config.py<br/>LLM / Data Vendor / Debate / Risk Config"]
+    CFG --> TAG
+
+    TAG --> LLM["LLM Client Factory<br/>llm_clients/factory.py"]
+
+    LLM --> QUICK["Quick Thinking LLM<br/>Analysts / Trader / Debate"]
+    LLM --> DEEP["Deep Thinking LLM<br/>Research Manager / Portfolio Manager"]
+
+    TAG --> PROP["Propagator<br/>Create Initial AgentState"]
+    PROP --> STATE["Shared AgentState<br/><br/>market_report<br/>sentiment_report<br/>news_report<br/>fundamentals_report<br/>investment_debate_state<br/>trader_investment_plan<br/>risk_debate_state<br/>final_trade_decision"]
+
+    %% =========================
+    %% GRAPH
+    %% =========================
+
+    TAG --> SETUP["GraphSetup<br/>graph/setup.py"]
+
+    SETUP --> MA["Market Analyst"]
+    MA --> MT["Market Tools"]
+    MT --> MA
+
+    MA --> SA["Sentiment Analyst"]
+
+    SA --> NA["News Analyst"]
+    NA --> NT["News Tools"]
+    NT --> NA
+
+    NA --> FA["Fundamentals Analyst"]
+    FA --> FT["Fundamental Tools"]
+    FT --> FA
+
+    %% =========================
+    %% ANALYST REPORTS
+    %% =========================
+
+    MA --> MR["market_report"]
+    SA --> SR["sentiment_report"]
+    NA --> NR["news_report"]
+    FA --> FR["fundamentals_report"]
+
+    MR --> STATE
+    SR --> STATE
+    NR --> STATE
+    FR --> STATE
+
+    %% =========================
+    %% DATA FLOW
+    %% =========================
+
+    MT --> ROUTER["Data Vendor Router<br/>dataflows/interface.py"]
+    NT --> ROUTER
+    FT --> ROUTER
+
+    ROUTER --> YF["Yahoo Finance"]
+    ROUTER --> AV["Alpha Vantage"]
+    ROUTER --> FRED["FRED"]
+    ROUTER --> POLY["Polymarket"]
+
+    SA --> ST["StockTwits"]
+    SA --> REDDIT["Reddit"]
+    SA --> YNEWS["Yahoo Finance News"]
+
+    %% =========================
+    %% RESEARCH TEAM
+    %% =========================
+
+    FA --> BULL["Bull Researcher"]
+    BULL --> BEAR["Bear Researcher"]
+    BEAR --> BULL
+
+    BULL --> DEBATE["Investment Debate State"]
+    BEAR --> DEBATE
+
+    DEBATE --> RM["Research Manager<br/>Deep Thinking LLM"]
+
+    RM --> IP["Investment Plan<br/><br/>Buy<br/>Overweight<br/>Hold<br/>Underweight<br/>Sell"]
+
+    %% =========================
+    %% TRADER
+    %% =========================
+
+    IP --> TRADER["Trader Agent<br/>Quick Thinking LLM"]
+
+    TRADER --> TP["Transaction Proposal<br/><br/>Buy / Hold / Sell<br/>Entry Price<br/>Stop Loss<br/>Position Sizing"]
+
+    %% =========================
+    %% RISK MANAGEMENT
+    %% =========================
+
+    TP --> AGG["Aggressive Risk Analyst"]
+    AGG --> CONS["Conservative Risk Analyst"]
+    CONS --> NEUTRAL["Neutral Risk Analyst"]
+    NEUTRAL --> AGG
+
+    AGG --> RISK["Risk Debate State"]
+    CONS --> RISK
+    NEUTRAL --> RISK
+
+    RISK --> PM["Portfolio Manager<br/>Deep Thinking LLM"]
+
+    %% =========================
+    %% FINAL DECISION
+    %% =========================
+
+    PM --> FINAL["Final Trade Decision"]
+
+    FINAL --> SIG["SignalProcessor"]
+    SIG --> RESULT["Final Rating<br/><br/>BUY<br/>OVERWEIGHT<br/>HOLD<br/>UNDERWEIGHT<br/>SELL"]
+
+    %% =========================
+    %% MEMORY
+    %% =========================
+
+    FINAL --> MEMORY["TradingMemoryLog<br/>memory.py"]
+    MEMORY --> REFLECT["Reflector<br/>reflection.py"]
+
+    REFLECT --> OUTCOME["Actual Return<br/>Alpha vs Benchmark"]
+    OUTCOME --> MEMORY
+
+    MEMORY -. "Past Context" .-> PM
+
+    %% =========================
+    %% PERSISTENCE
+    %% =========================
+
+    TAG --> CHECK["Checkpoint<br/>SQLite / LangGraph"]
+    CHECK -. "Resume after crash" .-> TAG
+
+    FINAL --> REPORT["reporting.py"]
+
+    REPORT --> FILES["Generated Reports<br/><br/>1_analysts/<br/>2_research/<br/>3_trading/<br/>4_risk/<br/>5_portfolio/<br/>complete_report.md"]

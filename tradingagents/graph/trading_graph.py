@@ -3,11 +3,12 @@
 import json
 import logging
 import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import yfinance as yf
+import yfinance as yf  # compatibility injection point; routed calls use dataflows.interface
 from langgraph.prebuilt import ToolNode
 
 # Import the abstract tool methods from agent_utils
@@ -32,6 +33,7 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.profiles import resolve_llm_api_key, resolve_llm_profile
 from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -91,24 +93,42 @@ class TradingAgentsGraph:
         os.makedirs(self.config["data_cache_dir"], exist_ok=True)
         os.makedirs(self.config["results_dir"], exist_ok=True)
 
-        # Initialize LLMs with provider-specific thinking configuration
-        llm_kwargs = self._get_provider_kwargs()
+        # Resolve and construct Quick/Deep independently. Credentials live only
+        # in these short-lived runtime profiles and never enter self.config.
+        quick_profile = resolve_llm_profile(self.config, "quick")
+        deep_profile = resolve_llm_profile(self.config, "deep")
+        quick_api_key, _ = resolve_llm_api_key(quick_profile)
+        deep_api_key, _ = resolve_llm_api_key(deep_profile)
+        quick_kwargs = self._get_provider_kwargs(quick_profile.provider)
+        deep_kwargs = self._get_provider_kwargs(deep_profile.provider)
 
-        # Add callbacks to kwargs if provided (passed to LLM constructor)
+        if quick_api_key:
+            quick_kwargs["api_key"] = quick_api_key
+        if deep_api_key:
+            deep_kwargs["api_key"] = deep_api_key
+        # A role-specific Azure profile treats its model as that role's
+        # deployment. Legacy shared Azure config retains the old deployment-env
+        # fallback for backward compatibility.
+        if quick_profile.provider == "azure" and quick_profile.has_role_overrides:
+            quick_kwargs["azure_deployment"] = quick_profile.model
+        if deep_profile.provider == "azure" and deep_profile.has_role_overrides:
+            deep_kwargs["azure_deployment"] = deep_profile.model
+
         if self.callbacks:
-            llm_kwargs["callbacks"] = self.callbacks
+            quick_kwargs["callbacks"] = self.callbacks
+            deep_kwargs["callbacks"] = self.callbacks
 
         deep_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["deep_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+            provider=deep_profile.provider,
+            model=deep_profile.model,
+            base_url=deep_profile.base_url,
+            **deep_kwargs,
         )
         quick_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["quick_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+            provider=quick_profile.provider,
+            model=quick_profile.model,
+            base_url=quick_profile.base_url,
+            **quick_kwargs,
         )
 
         self.deep_thinking_llm = deep_client.get_llm()
@@ -150,10 +170,10 @@ class TradingAgentsGraph:
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
 
-    def _get_provider_kwargs(self) -> dict[str, Any]:
+    def _get_provider_kwargs(self, provider: str | None = None) -> dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
         kwargs = {}
-        provider = self.config.get("llm_provider", "").lower()
+        provider = (provider or self.config.get("llm_provider", "")).lower()
 
         if provider == "google":
             thinking_level = self.config.get("google_thinking_level")
@@ -187,6 +207,20 @@ class TradingAgentsGraph:
 
     def _create_tool_nodes(self) -> dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""
+        vietnam_media = str(
+            ((getattr(self, "config", None) or {}).get("tool_vendors") or {}).get(
+                "get_editorial_news", ""
+            )
+        ).strip().lower() == "vn_media"
+        macro_settings = (
+            (getattr(self, "config", None) or {}).get("vn_macro") or {}
+        )
+        macro_provider_values = macro_settings.get("providers") or ""
+        if not isinstance(macro_provider_values, (list, tuple)):
+            macro_provider_values = str(macro_provider_values).split(",")
+        vietnam_macro = bool(macro_settings.get("enabled", False)) and any(
+            str(item).strip() for item in macro_provider_values
+        )
         return {
             "market": ToolNode(
                 [
@@ -209,10 +243,14 @@ class TradingAgentsGraph:
             "news": ToolNode(
                 [
                     # News and insider information
-                    get_news,
+                    # GX disclosures and VN editorial RSS are prefetched once
+                    # by the analyst. Upstream profiles retain get_news here.
+                    *([] if vietnam_media or vietnam_macro else [get_news]),
                     get_global_news,
                     get_insider_transactions,
-                    get_macro_indicators,
+                    # GX/Vietnam macro is prefetched once by News Analyst from
+                    # its PIT archive. Never expose the FRED tool in that graph.
+                    *([] if vietnam_macro else [get_macro_indicators]),
                     get_prediction_markets,
                 ]
             ),
@@ -259,6 +297,8 @@ class TradingAgentsGraph:
         actual_holding_days)`` or ``(None, None, None)`` if price data is
         unavailable (too recent, delisted, or network error).
         """
+        from tradingagents.dataflows.config import get_config
+        from tradingagents.dataflows.interface import get_ohlcv_frame
         from tradingagents.dataflows.symbol_utils import normalize_symbol
 
         try:
@@ -266,11 +306,32 @@ class TradingAgentsGraph:
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
 
-            # Normalize so the realized-return lookup hits the same instrument
-            # the analysis priced (e.g. XAUUSD -> GC=F) (#984). The benchmark is
-            # already a canonical Yahoo symbol from ``_resolve_benchmark``.
-            stock = yf.Ticker(normalize_symbol(ticker)).history(start=trade_date, end=end_str)
-            bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
+            graph_config = getattr(self, "config", None)
+            active_config = graph_config if isinstance(graph_config, Mapping) else get_config()
+            vendor = active_config.get("tool_vendors", {}).get(
+                "get_stock_data",
+                active_config.get("data_vendors", {}).get("core_stock_apis", "yfinance"),
+            )
+            chain = [item.strip() for item in str(vendor).split(",") if item.strip()]
+
+            if chain == ["yfinance"]:
+                # Backward-compatible upstream profile and test injection point.
+                # The GX profile always uses the transport-neutral route below.
+                end_exclusive = (end + timedelta(days=1)).strftime("%Y-%m-%d")
+
+                def yahoo_history(symbol: str):
+                    return yf.Ticker(normalize_symbol(symbol)).history(
+                        start=trade_date, end=end_exclusive
+                    )
+
+                stock = yahoo_history(ticker)
+                bench = yahoo_history(benchmark)
+            else:
+                # Use the same configured source that priced the analysis. This
+                # is essential for Vietnamese symbols and keeps reflection
+                # provenance consistent with the reports.
+                stock = get_ohlcv_frame(ticker, trade_date, end_str)
+                bench = get_ohlcv_frame(benchmark, trade_date, end_str)
 
             if len(stock) < 2 or len(bench) < 2:
                 return None, None, None
@@ -352,11 +413,25 @@ class TradingAgentsGraph:
         selection, debate/risk depth, or asset mode starts fresh instead of
         silently continuing the previous graph (#1089).
         """
+        from .stage_runner import (
+            _runtime_macro_profile_identity,
+            _runtime_media_profile_identity,
+            macro_profile_fingerprint,
+            media_profile_fingerprint,
+        )
+
         return "|".join([
             "analysts=" + ",".join(self.selected_analysts),
             f"debate={self.config['max_debate_rounds']}",
             f"risk={self.config['max_risk_discuss_rounds']}",
             f"asset={asset_type}",
+            # Resolve/bootstrap the archive UUID before the checkpoint lookup.
+            # Using the path-hash identity here and the newly-created UUID later
+            # in _run_graph would produce two thread signatures in one first run.
+            "media="
+            + media_profile_fingerprint(_runtime_media_profile_identity(self.config)),
+            "macro="
+            + macro_profile_fingerprint(_runtime_macro_profile_identity(self.config)),
         ])
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock"):
@@ -428,6 +503,26 @@ class TradingAgentsGraph:
             asset_type=asset_type,
             past_context=past_context,
             instrument_context=instrument_context,
+        )
+        # Full propagate() receives the same immutable media identity as the
+        # independently resumable stage runner. This activates the VN branch
+        # without changing upstream profiles and binds snapshot/checkpoint reuse.
+        from .stage_runner import (
+            _runtime_macro_profile_identity,
+            _runtime_media_profile_identity,
+            macro_profile_fingerprint,
+            media_profile_fingerprint,
+        )
+
+        media_profile = _runtime_media_profile_identity(self.config)
+        init_agent_state["media_profile"] = media_profile
+        init_agent_state["media_profile_fingerprint"] = media_profile_fingerprint(
+            media_profile
+        )
+        macro_profile = _runtime_macro_profile_identity(self.config)
+        init_agent_state["macro_profile"] = macro_profile
+        init_agent_state["macro_profile_fingerprint"] = macro_profile_fingerprint(
+            macro_profile
         )
         args = self.propagator.get_graph_args()
 

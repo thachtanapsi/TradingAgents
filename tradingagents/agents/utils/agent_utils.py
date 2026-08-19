@@ -17,12 +17,15 @@ from tradingagents.agents.utils.fundamental_data_tools import (
 from tradingagents.agents.utils.macro_data_tools import get_macro_indicators
 from tradingagents.agents.utils.market_data_validation_tools import get_verified_market_snapshot
 from tradingagents.agents.utils.news_data_tools import (
+    get_disclosures,
+    get_editorial_news,
     get_global_news,
     get_insider_transactions,
     get_news,
 )
 from tradingagents.agents.utils.prediction_markets_tools import get_prediction_markets
 from tradingagents.agents.utils.technical_indicators_tools import get_indicators
+from tradingagents.agents.utils.vietnam_macro_tools import get_vietnam_macro_context
 
 # Public surface: the data tools are imported here so agents and the graph
 # import them from one place, plus the instrument/language helpers defined below.
@@ -34,9 +37,12 @@ __all__ = [
     "get_cashflow",
     "get_income_statement",
     "get_news",
+    "get_editorial_news",
+    "get_disclosures",
     "get_global_news",
     "get_insider_transactions",
     "get_macro_indicators",
+    "get_vietnam_macro_context",
     "get_prediction_markets",
     "get_verified_market_snapshot",
     "build_instrument_context",
@@ -75,8 +81,22 @@ def _clean_identity_value(value: Any) -> str | None:
     return cleaned
 
 
+def _identity_source_key() -> tuple[str, str, str]:
+    from tradingagents.dataflows.config import get_config
+
+    config = get_config()
+    vendor = config.get("tool_vendors", {}).get(
+        "get_stock_data",
+        config.get("data_vendors", {}).get("core_stock_apis", "yfinance"),
+    )
+    gx = config.get("gx_market_info", {})
+    return str(vendor), str(gx.get("transport", "api")), str(gx.get("base_url", ""))
+
+
 @functools.lru_cache(maxsize=256)
-def resolve_instrument_identity(ticker: str) -> dict:
+def _resolve_instrument_identity_cached(
+    ticker: str, source_key: tuple[str, str, str]
+) -> dict:
     """Resolve deterministic identity metadata (company name, sector, …) for a ticker.
 
     This exists to stop the pipeline from hallucinating a *different* company
@@ -93,7 +113,18 @@ def resolve_instrument_identity(ticker: str) -> dict:
     The symbol is normalized first (e.g. ``XAUUSD`` -> ``GC=F``) so identity
     resolves for the same instrument the price path actually fetches (#983).
     """
+    from tradingagents.dataflows.interface import get_instrument_identity
     from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+    vendor = source_key[0]
+    if "gx_market_info" in [item.strip() for item in vendor.split(",")]:
+        try:
+            return get_instrument_identity(ticker)
+        except Exception as exc:  # noqa: BLE001 — identity remains best effort
+            logger.debug("Could not resolve GX instrument identity for %s: %s", ticker, exc)
+            # Never fall through to Yahoo under the GX profile: that would mix
+            # identities across vendors and can leak current/global metadata.
+            return {}
 
     try:
         info = yf.Ticker(normalize_symbol(ticker)).info or {}
@@ -117,6 +148,17 @@ def resolve_instrument_identity(ticker: str) -> dict:
         if value:
             identity[target_key] = value
     return identity
+
+
+def resolve_instrument_identity(ticker: str) -> dict:
+    """Resolve identity with a cache scoped to the active vendor/transport."""
+    return _resolve_instrument_identity_cached(ticker, _identity_source_key())
+
+
+# Preserve the public cache controls used by callers/tests while including the
+# data-source identity in cache keys.
+resolve_instrument_identity.cache_clear = _resolve_instrument_identity_cached.cache_clear
+resolve_instrument_identity.cache_info = _resolve_instrument_identity_cached.cache_info
 
 
 def build_instrument_context(
@@ -212,6 +254,3 @@ def create_msg_delete():
         return {"messages": removal_operations + [placeholder]}
 
     return delete_messages
-
-
-

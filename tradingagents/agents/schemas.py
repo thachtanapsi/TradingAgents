@@ -21,7 +21,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # LLMs sometimes write a placeholder string ("None", "N/A", ...) into an optional
 # numeric field instead of omitting it. Coerce those to None so the structured
@@ -270,6 +270,71 @@ class SentimentBand(str, Enum):
     BEARISH = "Bearish"
 
 
+SocialStatus = Literal["available", "partial", "unavailable", "disabled"]
+SentimentConfidence = Literal["low", "medium", "high"]
+
+
+class EvidenceSignal(BaseModel):
+    """A typed sentiment signal derived from one independent evidence lane.
+
+    ``unavailable`` and ``disabled`` deliberately carry no direction.  This is
+    the important distinction between an absent source and genuinely balanced
+    evidence: only the latter may be labelled ``Neutral`` with a score of 5.
+    """
+
+    status: SocialStatus
+    provider: str = Field(min_length=1)
+    band: SentimentBand | None = None
+    score: float | None = Field(default=None, ge=0.0, le=10.0)
+    confidence: SentimentConfidence | None = None
+    sample_size: int = Field(default=0, ge=0)
+    unique_authors: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_absence_has_no_direction(self):
+        if self.status in {"unavailable", "disabled"} and any(
+            value is not None for value in (self.band, self.score, self.confidence)
+        ):
+            raise ValueError(
+                f"{self.status} evidence must not have band, score, or confidence"
+            )
+        if self.status == "available" and any(
+            value is None for value in (self.band, self.score, self.confidence)
+        ):
+            raise ValueError(
+                "available evidence requires band, score, and confidence"
+            )
+        if self.status == "partial" and not self.warnings:
+            raise ValueError("partial evidence must describe its coverage gap in warnings")
+        return self
+
+
+def _legacy_evidence(values: dict) -> dict:
+    """Build lane metadata for callers using the pre-v2 report shape.
+
+    ``SentimentReport`` was public before evidence lanes existed.  Synthesising
+    two explicitly-labelled legacy lanes lets old integrations keep creating
+    reports while every newly-produced report uses the full contract.
+    """
+
+    has_direction = all(
+        values.get(field) is not None
+        for field in ("overall_band", "overall_score", "confidence")
+    )
+    signal = {
+        "status": "available" if has_direction else "unavailable",
+        "provider": "legacy_combined",
+        "band": values.get("overall_band") if has_direction else None,
+        "score": values.get("overall_score") if has_direction else None,
+        "confidence": values.get("confidence") if has_direction else None,
+        "sample_size": 0,
+        "unique_authors": 0,
+        "warnings": ["Evidence-lane provenance was not supplied by this legacy caller."],
+    }
+    return {"retail_social_signal": dict(signal), "media_tone": dict(signal)}
+
+
 class SentimentReport(BaseModel):
     """Structured sentiment report produced by the Sentiment Analyst.
 
@@ -281,15 +346,26 @@ class SentimentReport(BaseModel):
     deterministic header so the saved report stays human-readable.
     """
 
-    overall_band: SentimentBand = Field(
+    status: Literal["available", "partial", "unavailable"] = Field(
+        default="available",
+        description=(
+            "Overall evidence availability. Use available only when both evidence "
+            "lanes are available, partial when at least one lane is usable, and "
+            "unavailable when neither lane is usable."
+        ),
+    )
+    overall_band: SentimentBand | None = Field(
+        default=None,
         description=(
             "Overall sentiment direction. Exactly one of: "
             "Bullish / Mildly Bullish / Neutral / Mixed / Mildly Bearish / Bearish. "
             "Use Mixed when sources point in clearly different directions. "
-            "Use Neutral only when all sources are genuinely silent or non-committal."
+            "Use Neutral only when substantive evidence is genuinely balanced. "
+            "It must be null when status is unavailable."
         ),
     )
-    overall_score: float = Field(
+    overall_score: float | None = Field(
+        default=None,
         ge=0.0,
         le=10.0,
         description=(
@@ -301,14 +377,15 @@ class SentimentReport(BaseModel):
             "Only the 0–10 bounds are enforced."
         ),
     )
-    confidence: Literal["low", "medium", "high"] = Field(
+    confidence: SentimentConfidence | None = Field(
+        default=None,
         description=(
             "Confidence in the assessment based on data quality and sample size. "
-            "Use 'low' when one or more sources returned a placeholder or fewer "
-            "than 5 data points; 'medium' when data is present but sparse; "
-            "'high' when all three sources returned substantive data."
+            "It must be null when status is unavailable."
         ),
     )
+    retail_social_signal: EvidenceSignal
+    media_tone: EvidenceSignal
     narrative: str = Field(
         description=(
             "Full sentiment report covering, in order: "
@@ -324,6 +401,55 @@ class SentimentReport(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_shape(cls, value):
+        if not isinstance(value, dict):
+            return value
+        values = dict(value)
+        if "retail_social_signal" not in values and "media_tone" not in values:
+            values.update(_legacy_evidence(values))
+        return values
+
+    @model_validator(mode="after")
+    def _validate_overall_semantics(self):
+        directional = (self.overall_band, self.overall_score, self.confidence)
+        if self.status == "unavailable":
+            if any(value is not None for value in directional):
+                raise ValueError(
+                    "unavailable sentiment must not have band, score, or confidence"
+                )
+        elif self.status == "available" and any(value is None for value in directional):
+            raise ValueError(
+                "available sentiment requires band, score, and confidence"
+            )
+        elif self.status == "partial":
+            present = [value is not None for value in directional]
+            if any(present) and not all(present):
+                raise ValueError(
+                    "partial sentiment direction requires band, score, and confidence together"
+                )
+
+        lanes = (self.retail_social_signal, self.media_tone)
+        enabled = [lane for lane in lanes if lane.status != "disabled"]
+        usable = [lane.status in {"available", "partial"} for lane in enabled]
+        expected_status = (
+            "available"
+            if enabled and all(lane.status == "available" for lane in enabled)
+            else "partial"
+            if any(usable)
+            else "unavailable"
+        )
+        if self.status != expected_status:
+            raise ValueError(
+                f"sentiment status must be {expected_status!r} for the supplied evidence lanes"
+            )
+        if self.status == "partial" and not any(lane.warnings for lane in lanes):
+            raise ValueError(
+                "partial sentiment must identify a missing source or coverage gap"
+            )
+        return self
+
 
 def render_sentiment_report(report: SentimentReport) -> str:
     """Render a SentimentReport to the markdown shape the rest of the system expects.
@@ -332,10 +458,46 @@ def render_sentiment_report(report: SentimentReport) -> str:
     narrative so the saved report is both human-readable and machine-parseable
     without regex.
     """
-    return "\n".join([
-        f"**Overall Sentiment:** **{report.overall_band.value}** "
-        f"(Score: {report.overall_score:.1f}/10)",
-        f"**Confidence:** {report.confidence.capitalize()}",
+    if report.status == "unavailable":
+        overall = "**Overall Sentiment:** **Unavailable**"
+        confidence = "**Confidence:** Unavailable"
+    elif report.overall_band is None:
+        overall = "**Overall Sentiment:** **Not scored**"
+        confidence = "**Confidence:** Unavailable"
+    else:
+        overall = (
+            f"**Overall Sentiment:** **{report.overall_band.value}** "
+            f"(Score: {report.overall_score:.1f}/10)"
+        )
+        confidence = f"**Confidence:** {report.confidence.capitalize()}"
+
+    def lane_row(name: str, lane: EvidenceSignal) -> str:
+        direction = lane.band.value if lane.band is not None else "—"
+        score = f"{lane.score:.1f}" if lane.score is not None else "—"
+        return (
+            f"| {name} | {lane.status} | {lane.provider} | {direction} | "
+            f"{score} | {lane.sample_size} | {lane.unique_authors} |"
+        )
+
+    warnings = []
+    for lane_name, lane in (
+        ("Retail social", report.retail_social_signal),
+        ("Media tone", report.media_tone),
+    ):
+        warnings.extend(f"- {lane_name}: {warning}" for warning in lane.warnings)
+
+    parts = [
+        f"**Sentiment Status:** {report.status.capitalize()}",
+        overall,
+        confidence,
         "",
-        report.narrative,
-    ])
+        "### Evidence coverage",
+        "| Lane | Status | Provider | Direction | Score | Sample | Authors |",
+        "|---|---|---|---|---:|---:|---:|",
+        lane_row("Retail social", report.retail_social_signal),
+        lane_row("Media tone", report.media_tone),
+    ]
+    if warnings:
+        parts.extend(["", "### Coverage warnings", *warnings])
+    parts.extend(["", report.narrative])
+    return "\n".join(parts)

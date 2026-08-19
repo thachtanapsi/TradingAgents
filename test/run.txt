@@ -1,0 +1,4 @@
+
+tradingagents-gx --env-file .env.postgres-hosted full \
+  --ticker ACB \
+  --date 2026-08-17

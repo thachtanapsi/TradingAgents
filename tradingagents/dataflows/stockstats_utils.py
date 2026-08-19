@@ -113,18 +113,18 @@ def _assert_ohlcv_not_stale(
     requested = pd.to_datetime(curr_date, errors="coerce")
     if pd.isna(requested):
         return
-    requested = requested.normalize()
+    requested_date = requested.date()
     dates = _coerce_ohlcv_dates(data)
     if dates.empty:
         return
-    latest = dates.max().normalize()
-    stale_days = (requested - latest).days
+    latest_date = dates.max().date()
+    stale_days = (requested_date - latest_date).days
     if stale_days > max_stale_days:
         raise NoMarketDataError(
             symbol,
             canonical,
-            f"latest row is {latest.date()}, {stale_days} days before the "
-            f"requested {requested.date()} (stale) — refusing to use it",
+            f"latest row is {latest_date}, {stale_days} days before the "
+            f"requested {requested_date} (stale) — refusing to use it",
         )
 
 
@@ -145,8 +145,13 @@ def _needs_same_day_refresh(data_file, curr_date_dt, today_date) -> bool:
     return time.time() - os.path.getmtime(data_file) > OHLCV_CACHE_TTL_SECONDS
 
 
-def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
-    """Fetch OHLCV data with caching, filtered to prevent look-ahead bias.
+def load_yfinance_ohlcv(
+    symbol: str,
+    curr_date: str,
+    *,
+    start_date: str | None = None,
+) -> pd.DataFrame:
+    """Fetch Yahoo OHLCV with caching, filtered to prevent look-ahead bias.
 
     Downloads 5 years of data up to today and caches per symbol. On
     subsequent calls the cache is reused. Rows after curr_date are
@@ -163,8 +168,8 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
 
     # Cache uses a fixed window (5y to today) so one file per symbol.
     today_date = pd.Timestamp.today()
-    start_date = today_date - pd.DateOffset(years=5)
-    start_str = start_date.strftime("%Y-%m-%d")
+    window_start = pd.to_datetime(start_date) if start_date else today_date - pd.DateOffset(years=5)
+    start_str = window_start.strftime("%Y-%m-%d")
     # yfinance ``end`` is EXCLUSIVE; request tomorrow so today's row is included
     # when curr_date is the current day (#986). Look-ahead is still prevented by
     # the curr_date filter below.
@@ -218,6 +223,71 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     # feeding year-old prices into indicators (#1021).
     _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
 
+    return data
+
+
+def load_yfinance_ohlcv_range(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """Fetch an inclusive Yahoo range for internal routed consumers.
+
+    Reflection and benchmark calculations need a small explicit range rather
+    than the five-year indicator cache. Keeping this behind the internal vendor
+    router preserves test injection and guarantees GX profiles never call it.
+    """
+    canonical = normalize_symbol(symbol)
+    end_exclusive = (pd.to_datetime(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    data = yf_retry(
+        lambda: yf.Ticker(canonical).history(
+            start=pd.to_datetime(start_date).strftime("%Y-%m-%d"),
+            end=end_exclusive,
+        )
+    )
+    if data is None or data.empty or "Close" not in data.columns:
+        raise NoMarketDataError(
+            symbol, canonical, f"no rows between {start_date} and {end_date}"
+        )
+    frame = _clean_dataframe(_ensure_date_column(data.reset_index()))
+    start = pd.to_datetime(start_date)
+    end = pd.to_datetime(end_date)
+    frame = frame[(frame["Date"] >= start) & (frame["Date"] <= end)]
+    if frame.empty:
+        raise NoMarketDataError(
+            symbol, canonical, f"no rows between {start_date} and {end_date}"
+        )
+    return frame.reset_index(drop=True)
+
+
+def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
+    """Fetch OHLCV from the configured core vendor, never implicitly Yahoo."""
+    vendor = get_config().get("tool_vendors", {}).get(
+        "get_stock_data",
+        get_config().get("data_vendors", {}).get("core_stock_apis", "yfinance"),
+    )
+    if [item.strip() for item in str(vendor).split(",") if item.strip()] == ["yfinance"]:
+        # Preserve the upstream cache/freshness behavior for the upstream
+        # profile. The GX profile never enters this branch.
+        return load_yfinance_ohlcv(symbol, curr_date)
+
+    from .interface import get_ohlcv_frame
+
+    end = pd.to_datetime(curr_date)
+    start = end - pd.DateOffset(years=5)
+    routed_end = curr_date if "T" in str(curr_date) else end.strftime("%Y-%m-%d")
+    data = get_ohlcv_frame(
+        symbol,
+        start.strftime("%Y-%m-%d"),
+        routed_end,
+    )
+    data = _clean_dataframe(data)
+    # GX daily candles carry the completed-session time (15:00 Asia/HCM).
+    # Comparing that timestamp to a date-only midnight cutoff drops the very
+    # session requested by the analyst. The GX source has already rejected
+    # incomplete/future candles, so compare calendar dates here.
+    data = data[data["Date"].dt.date <= end.date()]
+    _assert_ohlcv_not_stale(data, curr_date, symbol, symbol)
     return data
 
 

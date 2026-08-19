@@ -71,6 +71,18 @@ class VendorRoutingTests(unittest.TestCase):
             result = interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
         self.assertEqual(result, "AV_DATA")
 
+    def test_result_variant_records_observed_vendor_without_changing_value_contract(self):
+        set_config({"data_vendors": {"core_stock_apis": "yfinance,alpha_vantage"}})
+        with self._route({"yfinance": _no_data, "alpha_vantage": _returns("AV_DATA")}):
+            result = interface.route_to_vendor_result(
+                "get_stock_data", "AAPL", "2026-01-01", "2026-01-10"
+            )
+
+        self.assertEqual(result.value, "AV_DATA")
+        self.assertEqual(result.actual_vendor, "alpha_vantage")
+        self.assertEqual(result.attempted_vendors, ("yfinance", "alpha_vantage"))
+        self.assertTrue(result.actual_vendor_observed)
+
     def test_primary_error_is_logged_not_masked(self):
         # #989: primary errors + fallback no-data -> NO_DATA, but the failure
         # must be visible in logs (broken primary not hidden).
@@ -95,6 +107,21 @@ class VendorRoutingTests(unittest.TestCase):
         with self._route({"yfinance": _no_data, "alpha_vantage": _returns("AV_DATA")}):
             result = interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
         self.assertEqual(result, "AV_DATA")
+
+    def test_legacy_social_category_is_a_valid_upstream_route(self):
+        set_config({"data_vendors": {"social_data": "legacy_social"}})
+        with mock.patch(
+            "tradingagents.dataflows.interface.fetch_stocktwits_messages",
+            return_value="stocktwits evidence",
+        ), mock.patch(
+            "tradingagents.dataflows.interface.fetch_reddit_posts",
+            return_value="reddit evidence",
+        ):
+            result = interface.route_to_vendor(
+                "get_social_data", "NVDA", "2026-01-15"
+            )
+        self.assertIn("stocktwits evidence", result)
+        self.assertIn("reddit evidence", result)
 
     def _route_method(self, method, vendors):
         return mock.patch.dict(interface.VENDOR_METHODS, {method: vendors}, clear=False)

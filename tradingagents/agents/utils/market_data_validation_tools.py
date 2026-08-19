@@ -1,7 +1,9 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
+from tradingagents.agents.utils.analysis_context import effective_tool_cutoff
 from tradingagents.dataflows.market_data_validator import build_verified_market_snapshot
 
 
@@ -12,6 +14,7 @@ def get_verified_market_snapshot(
     look_back_days: Annotated[
         int, "number of recent trading rows to include for sanity-checking"
     ] = 30,
+    state: Annotated[dict[str, Any] | None, InjectedState] = None,
 ) -> str:
     """Deterministic verification snapshot for exact market-data claims.
 
@@ -20,4 +23,10 @@ def get_verified_market_snapshot(
     price levels, Bollinger bands, RSI, MACD, moving averages, support /
     resistance, or historical comparisons, and treat it as the source of truth.
     """
-    return build_verified_market_snapshot(symbol, curr_date, look_back_days)
+    effective_date = effective_tool_cutoff(state, curr_date) or curr_date
+    return build_verified_market_snapshot(
+        symbol,
+        effective_date,
+        look_back_days,
+        include_live_quote=bool(state and state.get("analysis_mode") == "live"),
+    )

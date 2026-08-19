@@ -80,6 +80,37 @@ def test_ensure_api_key_returns_existing(monkeypatch, cli_utils):
     assert result == "sk-already-set"
 
 
+def test_role_key_overrides_provider_key(monkeypatch, cli_utils):
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-key")
+    monkeypatch.setenv("TRADINGAGENTS_QUICK_LLM_API_KEY", "quick-key")
+
+    assert cli_utils.ensure_api_key("openai", role="quick") == "quick-key"
+
+
+def test_role_key_falls_back_to_provider_key(monkeypatch, cli_utils):
+    monkeypatch.delenv("TRADINGAGENTS_DEEP_LLM_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-key")
+
+    assert cli_utils.ensure_api_key("openai", role="deep") == "provider-key"
+
+
+def test_missing_role_and_provider_key_writes_only_role_key(
+    monkeypatch, tmp_path, cli_utils
+):
+    monkeypatch.delenv("TRADINGAGENTS_DEEP_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    fake_prompt = type("P", (), {"ask": staticmethod(lambda: "deep-role-key")})()
+
+    with patch.object(cli_utils.questionary, "password", return_value=fake_prompt):
+        result = cli_utils.ensure_api_key("anthropic", role="deep")
+
+    assert result == "deep-role-key"
+    content = (tmp_path / ".env").read_text()
+    assert "TRADINGAGENTS_DEEP_LLM_API_KEY" in content
+    assert "ANTHROPIC_API_KEY" not in content
+
+
 def test_ensure_api_key_no_op_for_ollama(monkeypatch, cli_utils):
     # Even with no env var set, ollama should not prompt and should return None.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

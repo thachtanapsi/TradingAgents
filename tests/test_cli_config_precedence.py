@@ -67,3 +67,22 @@ def test_checkpoint_flag_overrides_env(flag):
     with mock.patch.object(m, "DEFAULT_CONFIG", patched):
         cfg = m._build_run_config(SELECTIONS, checkpoint=flag)
     assert cfg["checkpoint_enabled"] is flag
+
+
+def test_build_run_config_preserves_independent_llm_profiles():
+    selections = dict(
+        SELECTIONS,
+        quick_llm_provider="ollama",
+        quick_llm_base_url="http://127.0.0.1:11434/v1",
+        deep_llm_provider="openai",
+        deep_llm_base_url="https://api.openai.com/v1",
+    )
+
+    cfg = m._build_run_config(selections, checkpoint=None)
+
+    assert cfg["quick_llm_provider"] == "ollama"
+    assert cfg["quick_llm_base_url"] == "http://127.0.0.1:11434/v1"
+    assert cfg["deep_llm_provider"] == "openai"
+    assert cfg["deep_llm_base_url"] == "https://api.openai.com/v1"
+    assert cfg["llm_provider"] == "ollama"
+    assert cfg["backend_url"] == "http://127.0.0.1:11434/v1"

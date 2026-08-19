@@ -11,7 +11,7 @@ outcomes (a "Yes" at 0.76 means the market prices a 76% chance).
 """
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
@@ -24,6 +24,7 @@ REQUEST_TIMEOUT = 30
 
 # Default number of markets to return, ranked by traded volume.
 DEFAULT_LIMIT = 6
+_VN_TZ = timezone(timedelta(hours=7))
 
 
 def _request(path: str, params: dict) -> dict:
@@ -65,7 +66,29 @@ def _is_forward_looking(market: dict, now: datetime) -> bool:
     )
 
 
-def get_prediction_markets(topic: str, limit: int | None = None) -> str:
+def _market_date(value: str | date | datetime) -> date:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=_VN_TZ).date() if value.tzinfo is None else value.astimezone(_VN_TZ).date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return (
+            parsed.replace(tzinfo=_VN_TZ).date()
+            if parsed.tzinfo is None
+            else parsed.astimezone(_VN_TZ).date()
+        )
+
+
+def get_prediction_markets(
+    topic: str,
+    limit: int | None = None,
+    as_of: str | date | datetime | None = None,
+    curr_date: str | date | datetime | None = None,
+) -> str:
     """Return live prediction-market probabilities for an event topic.
 
     Args:
@@ -79,6 +102,16 @@ def get_prediction_markets(topic: str, limit: int | None = None) -> str:
         each with its implied probability, traded volume, resolution date, and
         recent (1-week) move.
     """
+    requested_as_of = as_of if as_of is not None else curr_date
+    if as_of is not None and curr_date is not None and _market_date(as_of) != _market_date(curr_date):
+        raise ValueError("as_of and curr_date must refer to the same market date")
+    if requested_as_of is not None and _market_date(requested_as_of) < datetime.now(_VN_TZ).date():
+        return (
+            "DATA_UNAVAILABLE: Polymarket is a current-only source and cannot "
+            f"provide a point-in-time snapshot for {_market_date(requested_as_of).isoformat()}. "
+            "Proceed without prediction-market signal; do not substitute live probabilities."
+        )
+
     if limit is None:
         limit = DEFAULT_LIMIT
 
@@ -100,8 +133,18 @@ def get_prediction_markets(topic: str, limit: int | None = None) -> str:
     ]
     candidates.sort(key=lambda m: m.get("volumeNum") or 0, reverse=True)
 
+    exact_cutoff_notice = ""
+    if isinstance(requested_as_of, datetime) or (
+        isinstance(requested_as_of, str) and len(requested_as_of.strip()) > 10
+    ):
+        exact_cutoff_notice = (
+            "Point-in-time quality: current_only/partial. This live feed is "
+            "retrieved after the frozen cutoff and is not a historical snapshot; "
+            "do not present it as PIT-exact evidence.\n"
+        )
     header = (
         f'## Polymarket prediction markets: "{topic}"\n'
+        f"{exact_cutoff_notice}"
         f"Live, market-implied probabilities (higher traded volume = deeper, "
         f"more reliable). A probability is the crowd's priced odds of the event, "
         f"not a forecast you should take as certain.\n\n"

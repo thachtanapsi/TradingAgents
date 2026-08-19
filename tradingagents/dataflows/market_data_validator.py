@@ -11,6 +11,7 @@ claim. Deterministic, no LLM involved.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 import pandas as pd
 from stockstats import wrap
@@ -39,7 +40,11 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     df = data.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"])
-    df = df[df["Date"] <= pd.to_datetime(curr_date)].sort_values("Date")
+    cutoff_date = pd.to_datetime(curr_date).date()
+    # Daily vendors may timestamp a completed candle at the exchange close
+    # rather than midnight. Compare the session date so the requested day's
+    # verified row is not incorrectly discarded.
+    df = df[df["Date"].dt.date <= cutoff_date].sort_values("Date")
     if df.empty:
         raise ValueError(f"No OHLCV rows on or before {curr_date} for {symbol}.")
     return df
@@ -59,11 +64,71 @@ def _fmt(value) -> str:
     return str(value)
 
 
+def _live_quote_lines(symbol: str, analysis_cutoff: str) -> list[str]:
+    """Render a GX quote separately from completed daily OHLCV.
+
+    The quote is evidence at the frozen cutoff only.  It is deliberately never
+    appended to ``df`` or ``stock_df``, so it cannot alter a daily indicator.
+    """
+    from tradingagents.dataflows.config import get_config
+
+    config = get_config()
+    vendor = config.get("tool_vendors", {}).get(
+        "get_stock_data",
+        config.get("data_vendors", {}).get("core_stock_apis", "yfinance"),
+    )
+    vendors = [item.strip() for item in str(vendor).split(",") if item.strip()]
+    if vendors != ["gx_market_info"]:
+        return [
+            "### Live quote at frozen cutoff",
+            "",
+            "- Unavailable: live quote is only supported by the GX profile.",
+        ]
+
+    try:
+        from tradingagents.dataflows.gx_market_info import get_gx_market_info_client
+
+        client = get_gx_market_info_client()
+        quote = client.get_quote(symbol, analysis_cutoff)
+        meta: dict[str, Any] = client.provenance
+    except Exception:  # noqa: BLE001 - optional evidence must not sink market analysis
+        return [
+            "### Live quote at frozen cutoff",
+            "",
+            "- Unavailable: GX had no usable quote at the frozen cutoff.",
+        ]
+
+    lines = [
+        "### Live quote at frozen cutoff (not used in daily indicators)",
+        "",
+        f"- Cutoff: {analysis_cutoff}",
+        f"- Source timestamp: {_fmt(meta.get('source_timestamp') or quote.get('source_updated_at'))}",
+        f"- is_final: {str(bool(quote.get('is_final', False))).lower()}",
+        "- Point-in-time quality: partial (latest retained quote snapshot)",
+        "",
+        "| Field | Value |",
+        "|---|---:|",
+    ]
+    for field in (
+        "last_price",
+        "price_change",
+        "price_change_percentage",
+        "open_price",
+        "high_price",
+        "low_price",
+        "total_matched_volume",
+    ):
+        lines.append(f"| {field} | {_fmt(quote.get(field))} |")
+    return lines
+
+
 def build_verified_market_snapshot(
     symbol: str,
     curr_date: str,
     look_back_days: int = 30,
     indicators: Iterable[str] | None = None,
+    *,
+    include_live_quote: bool = False,
 ) -> str:
     """Render a ground-truth snapshot: latest OHLCV row, indicators, recent closes."""
     # `df` keeps the original capitalized OHLCV columns (Open/High/Low/Close/
@@ -110,6 +175,9 @@ def build_verified_market_snapshot(
               "| Date | Close |", "|---|---:|"]
     for _, row in recent.iterrows():
         lines.append(f"| {_fmt(row['Date'])} | {_fmt(row.get('Close'))} |")
+
+    if include_live_quote:
+        lines += [""] + _live_quote_lines(symbol, curr_date)
 
     lines += [
         "",

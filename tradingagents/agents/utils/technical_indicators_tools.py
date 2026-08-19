@@ -1,7 +1,9 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
+from tradingagents.agents.utils.analysis_context import effective_tool_cutoff
 from tradingagents.dataflows.interface import route_to_vendor
 
 
@@ -11,6 +13,7 @@ def get_indicators(
     indicator: Annotated[str, "technical indicator to get the analysis and report of"],
     curr_date: Annotated[str, "The current trading date you are trading on, YYYY-mm-dd"],
     look_back_days: Annotated[int, "how many days to look back"] = 30,
+    state: Annotated[dict[str, Any] | None, InjectedState] = None,
 ) -> str:
     """
     Retrieve a single technical indicator for a given ticker symbol.
@@ -25,11 +28,20 @@ def get_indicators(
     """
     # LLMs sometimes pass multiple indicators as a comma-separated string;
     # split and process each individually.
+    effective_date = effective_tool_cutoff(state, curr_date) or curr_date
     indicators = [i.strip().lower() for i in indicator.split(",") if i.strip()]
     results = []
     for ind in indicators:
         try:
-            results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
+            results.append(
+                route_to_vendor(
+                    "get_indicators",
+                    symbol,
+                    ind,
+                    effective_date,
+                    look_back_days,
+                )
+            )
         except ValueError as e:
             results.append(str(e))
     return "\n\n".join(results)

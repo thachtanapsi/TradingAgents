@@ -1,0 +1,132 @@
+%% TradingAgents APG - các phần giữ nguyên, mở rộng và bổ sung so với repo gốc
+%% Màu xám: repo gốc / giữ nguyên
+%% Màu xanh dương: thành phần gốc đã được mở rộng
+%% Màu xanh lá: thành phần mới của APG
+%% Màu vàng: nguồn dữ liệu
+%% Màu đỏ: nguồn bị khóa hoặc cần phê duyệt trước khi bật
+
+flowchart LR
+    subgraph entryLayer["Điểm chạy"]
+        upstreamCli["GỐC: tradingagents CLI và Python API"]:::original
+        gxCli["MỚI: tradingagents-gx CLI và Python Stage API"]:::added
+    end
+
+    subgraph orchestrationLayer["Điều phối và checkpoint"]
+        upstreamGraph["GỐC: TradingAgentsGraph.propagate"]:::original
+        stageRunner["MỚI: TradingAgentsStageRunner chạy full hoặc từng stage"]:::added
+        stageSession[("MỚI: StageSession v6 và session.json atomic")]:::added
+    end
+
+    subgraph gxLayer["Dữ liệu thị trường APG"]
+        gxDatabase[("g_market_info_1229")]:::dataSource
+        gxApi["MỚI: GX Analysis API và TradingView UDF"]:::added
+        gxClient["MỚI: GxMarketInfoClient chọn API hoặc PostgreSQL, không auto fallback"]:::added
+    end
+
+    subgraph vietnamLayer["Nguồn Việt Nam mới"]
+        cafef["CafeF RSS: chứng khoán, doanh nghiệp, ngân hàng, vĩ mô"]:::conditional
+        vnexpress["VnExpress RSS: kinh doanh"]:::conditional
+        mediaService["MỚI: VietnamMediaService thu thập RSS metadata"]:::added
+        mediaArchive[("MỚI: SQLite media archive mã hóa, PIT và retention 30 ngày")]:::added
+        fireant["FireAnt Posts API"]:::conditional
+        socialService["MỚI: VietnamSocialService thu thập watchlist"]:::added
+        socialArchive[("MỚI: SQLite social archive mã hóa, PIT và snapshot")]:::added
+        nso["NSO và NSDP: SDMX, Excel, báo cáo tháng"]:::dataSource
+        sbv["SBV: tỷ giá và lãi suất công khai"]:::dataSource
+        macroService["MỚI: VietnamMacroService chuẩn hóa số liệu"]:::added
+        macroArchive[("MỚI: SQLite macro archive, revision và strict PIT")]:::added
+    end
+
+    subgraph existingSources["Nguồn ngoài giữ lại"]
+        upstreamData["GỐC: Yahoo, Alpha Vantage, Reddit và StockTwits cho profile upstream"]:::original
+        globalData["GỐC: Yahoo global news và Polymarket"]:::original
+        fred["FRED macro: chỉ profile upstream và quốc tế"]:::conditional
+    end
+
+    subgraph integrationLayer["Hợp đồng dữ liệu và evidence"]
+        dataRouter["MỞ RỘNG: dataflows, vendor router và provenance thực tế"]:::extended
+        gxContracts["MỚI: market, fundamentals, benchmark và official disclosures"]:::added
+        mediaLane["MỚI: editorial media cho Sentiment và News"]:::added
+        socialLane["MỚI: retail social signal cho Sentiment"]:::added
+        macroLane["MỚI: vn_macro cho News, tách khỏi FRED"]:::added
+    end
+
+    subgraph agentLayer["Pipeline multi-agent"]
+        analysts["MỞ RỘNG: Market, Sentiment, News và Fundamental Analysts"]:::extended
+        researchers["GỐC: Bull và Bear Researchers đến Research Manager"]:::original
+        trader["GỐC: Trader Agent"]:::original
+        risk["GỐC: Aggressive, Neutral, Conservative Risk và Portfolio Manager"]:::original
+        decision["GỐC: final_trade_decision"]:::original
+    end
+
+    subgraph llmLayer["LLM backend"]
+        quickProfile["MỚI: Quick profile có provider, model, base URL và key riêng"]:::added
+        deepProfile["MỚI: Deep profile có provider, model, base URL và key riêng"]:::added
+        openai["OpenAI hosted qua API key"]:::dataSource
+        ollama["Ollama local hoặc OpenAI-compatible"]:::dataSource
+    end
+
+    subgraph legendLayer["Chú thích"]
+        legendOriginal["GỐC: giữ nguyên"]:::original
+        legendExtended["MỞ RỘNG: sửa thành phần gốc"]:::extended
+        legendAdded["MỚI: bổ sung của APG"]:::added
+        legendSource["NGUỒN: dữ liệu hoặc LLM"]:::dataSource
+        legendConditional["ĐIỀU KIỆN: khóa mặc định hoặc cần phê duyệt"]:::conditional
+    end
+
+    upstreamCli --> upstreamGraph
+    gxCli --> stageRunner
+    stageRunner <-->|"Lưu và resume"| stageSession
+    upstreamGraph --> analysts
+    stageRunner -->|"Chạy analyst riêng hoặc tiếp tục session"| analysts
+
+    gxDatabase -->|"GInfo và GxCache"| gxApi
+    gxApi -->|"GX_DATA_TRANSPORT=api"| gxClient
+    gxDatabase -->|"GX_DATA_TRANSPORT=postgres read-only; có public.fiin_cashflow"| gxClient
+    gxClient --> gxContracts
+    gxContracts --> dataRouter
+
+    cafef -.->|"RSS allowlist, không crawl full text"| mediaService
+    vnexpress -.->|"RSS allowlist, không crawl full text"| mediaService
+    mediaService -->|"Encrypt, first_seen_at và PIT cutoff"| mediaArchive
+    mediaArchive -->|"Archive-only evidence"| mediaLane
+    mediaLane --> dataRouter
+
+    fireant -.->|"Bearer token và exact ticker tags"| socialService
+    socialService -->|"Encrypt, dedupe và snapshot"| socialArchive
+    socialArchive -->|"Archive-only evidence"| socialLane
+    socialLane --> dataRouter
+
+    nso -->|"Allowlist HTTPS; không lưu raw response"| macroService
+    sbv -->|"Allowlist HTTPS; stale/partial khi WAF"| macroService
+    macroService -->|"Normalize, first_seen_at và revision"| macroArchive
+    macroArchive -->|"Archive-only strict PIT evidence"| macroLane
+    macroLane --> dataRouter
+
+    upstreamData -->|"Upstream và non-Vietnam"| dataRouter
+    globalData -->|"Global context"| dataRouter
+    fred -.->|"Không đi vào GX News"| dataRouter
+
+    dataRouter -->|"OHLCV, technical, financials, disclosures, media, social và VN macro"| analysts
+
+    analysts --> researchers
+    researchers --> trader
+    trader --> risk
+    risk --> decision
+
+    openai --> quickProfile
+    openai --> deepProfile
+    ollama --> quickProfile
+    ollama --> deepProfile
+    quickProfile -.->|"Analysts, Bull/Bear, Trader và Risk Analysts"| analysts
+    quickProfile -.-> researchers
+    quickProfile -.-> trader
+    quickProfile -.-> risk
+    deepProfile -.->|"Research Manager"| researchers
+    deepProfile -.->|"Portfolio Manager"| risk
+
+    classDef original fill:#f1f5f9,stroke:#64748b,color:#0f172a,stroke-width:1.5px
+    classDef extended fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
+    classDef added fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:2px
+    classDef dataSource fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:1.5px
+    classDef conditional fill:#fee2e2,stroke:#dc2626,color:#7f1d1d,stroke-width:2px,stroke-dasharray:5 3

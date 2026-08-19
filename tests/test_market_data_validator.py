@@ -45,6 +45,28 @@ class TestVerifiedSnapshot:
         assert "Latest trading row used: 2026-05-15" in snap
         assert "Recent verified closes" in snap
 
+    def test_includes_completed_candle_timestamped_at_same_day_close(
+        self, monkeypatch
+    ):
+        data = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(
+                    ["2026-05-12 15:00:00", "2026-05-13 15:00:00"]
+                ),
+                "Open": [100.0, 101.0],
+                "High": [102.0, 103.0],
+                "Low": [99.0, 100.0],
+                "Close": [101.0, 102.0],
+                "Volume": [1_000, 2_000],
+            }
+        )
+        monkeypatch.setattr(validator, "load_ohlcv", lambda _s, _d: data)
+
+        snap = validator.build_verified_market_snapshot("COF", "2026-05-13")
+
+        assert "Latest trading row used: 2026-05-13" in snap
+        assert "| Close | 102.00 |" in snap
+
     def test_raises_when_no_rows_on_or_before_date(self, monkeypatch):
         monkeypatch.setattr(validator, "load_ohlcv", lambda s, d: _sample_ohlcv())
         with pytest.raises(ValueError):
@@ -61,6 +83,45 @@ class TestVerifiedSnapshot:
         # last-N closes table has at most 30 data rows
         close_rows = [ln for ln in snap.splitlines() if ln.startswith("| 2026-")]
         assert 0 < len(close_rows) <= 30
+
+    def test_live_quote_is_separate_and_never_changes_daily_indicators(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(validator, "load_ohlcv", lambda _s, _d: _sample_ohlcv())
+        monkeypatch.setattr(
+            "tradingagents.dataflows.config.get_config",
+            lambda: {"tool_vendors": {"get_stock_data": "gx_market_info"}},
+        )
+
+        class Client:
+            provenance = {"source_timestamp": "2026-05-20T09:05:00Z"}
+
+            def get_quote(self, symbol, cutoff):
+                assert symbol == "COF"
+                assert cutoff == "2026-05-20T16:05:00+07:00"
+                return {
+                    "last_price": "999999",
+                    "price_change": "1000",
+                    "is_final": False,
+                    "source_updated_at": "2026-05-20T09:05:00Z",
+                }
+
+        monkeypatch.setattr(
+            "tradingagents.dataflows.gx_market_info.get_gx_market_info_client",
+            lambda: Client(),
+        )
+
+        snap = validator.build_verified_market_snapshot(
+            "COF",
+            "2026-05-20T16:05:00+07:00",
+            include_live_quote=True,
+        )
+
+        assert "Live quote at frozen cutoff (not used in daily indicators)" in snap
+        assert "| last_price | 999999 |" in snap
+        assert "is_final: false" in snap
+        # The completed daily close remains the verified row, not the quote.
+        assert "| Close | 135 |" in snap
 
 
 @pytest.mark.unit

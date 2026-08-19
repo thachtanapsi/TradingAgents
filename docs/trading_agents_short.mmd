@@ -1,0 +1,42 @@
+flowchart LR
+
+    INPUT["Ticker + Date"] --> GRAPH["TradingAgentsGraph"]
+
+    GRAPH --> ANALYSTS
+
+    subgraph ANALYSTS["1. Analyst Team"]
+        M["Market"]
+        S["Sentiment"]
+        N["News"]
+        F["Fundamentals"]
+
+        M --> S --> N --> F
+    end
+
+    F --> RESEARCH
+
+    subgraph RESEARCH["2. Research Team"]
+        BULL["Bull Researcher"]
+        BEAR["Bear Researcher"]
+        RM["Research Manager"]
+
+        BULL <--> BEAR
+        BULL --> RM
+        BEAR --> RM
+    end
+
+    RM --> TRADER["3. Trader"]
+
+    TRADER --> RISK
+
+    subgraph RISK["4. Risk Management"]
+        A["Aggressive"]
+        C["Conservative"]
+        NE["Neutral"]
+
+        A --> C --> NE --> A
+    end
+
+    RISK --> PM["5. Portfolio Manager"]
+
+    PM --> DECISION["Final Decision<br/>Buy / Overweight / Hold / Underweight / Sell"]

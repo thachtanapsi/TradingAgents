@@ -379,6 +379,18 @@ def get_cashflow(
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None
 ):
     """Get cash flow data from yfinance."""
+    from .config import get_config
+
+    config = get_config()
+    if config.get("gx_market_info", {}).get("strict_point_in_time") and curr_date:
+        requested = pd.to_datetime(curr_date).date()
+        if requested < datetime.now().date():
+            raise NoMarketDataError(
+                ticker,
+                normalize_symbol(ticker),
+                "historical cash flow is unavailable in strict point-in-time mode: "
+                "Yahoo statements do not provide a reliable publication timestamp",
+            )
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
