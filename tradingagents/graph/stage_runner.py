@@ -35,6 +35,7 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfiguredError
 from tradingagents.dataflows.market_data_validator import (
     build_verified_market_snapshot,
+    get_verified_price_reference,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients.api_key_env import PROVIDER_API_KEY_ENV
@@ -885,6 +886,25 @@ class TradingAgentsStageRunner:
     def _run_analyst(
         self, session: StageSession, state: dict[str, Any], stage: str
     ) -> dict[str, Any]:
+        if stage == "market":
+            # Freeze one completed-daily-close reference at the session's
+            # immutable cutoff.  Portfolio Manager consumes only this stored
+            # object; it never refetches a quote or consults the wall clock.
+            try:
+                state["market_price_reference"] = get_verified_price_reference(
+                    session.ticker,
+                    session.analysis_cutoff,
+                )
+            except Exception:
+                # The market report may still be useful when a standalone
+                # price reference cannot be verified.  Downstream target
+                # validation then fails closed with an explicit reason.
+                state["market_price_reference"] = {
+                    "status": "unavailable",
+                    "ticker": session.ticker,
+                    "analysis_cutoff": session.analysis_cutoff,
+                    "reason": "A completed daily close could not be verified at the analysis cutoff.",
+                }
         if stage == "market" and session.analysis_mode == "live":
             # Fetch once, before any model invocation.  The Market Analyst
             # injects this immutable evidence into every reasoning round and
@@ -922,6 +942,10 @@ class TradingAgentsStageRunner:
                 if not state.get(report_key):
                     raise RuntimeError(f"{stage} analyst returned no {report_key}")
                 result = {report_key: state[report_key]}
+                if stage == "market":
+                    result["market_price_reference"] = state[
+                        "market_price_reference"
+                    ]
                 if stage == "sentiment" and state.get("sentiment_source_metadata"):
                     result["sentiment_source_metadata"] = self._public_sentiment_metadata(
                         state["sentiment_source_metadata"]
@@ -1113,9 +1137,14 @@ class TradingAgentsStageRunner:
             "GX_MARKET_INFO_TV_TOKEN",
             "GX_ANALYSIS_DATA_API_KEY",
             "GX_MARKET_INFO_DATABASE_URL",
+            "GX_MARKET_INFO_POSTGRES_DSN",
+            "GX_TRADINGVIEW_API_KEY",
             "FIREANT_ACCESS_TOKEN",
             "FIREANT_ARCHIVE_ENCRYPTION_KEY",
             "VN_MEDIA_ARCHIVE_ENCRYPTION_KEY",
+            "FRED_API_KEY",
+            "ALPHA_VANTAGE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
         }
         for name in secret_names:
             secret = os.environ.get(name)

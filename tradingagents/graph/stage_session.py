@@ -51,6 +51,11 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _now_vietnam() -> datetime:
+    """Injectable wall clock used only when creating a fresh close run."""
+    return datetime.now(VIETNAM_TIMEZONE)
+
+
 def _parse_analysis_date(value: str) -> date:
     """Parse the public run date without accepting an embedded timestamp."""
     if not isinstance(value, str):
@@ -628,6 +633,14 @@ class StageSession:
             analysis_mode,
             analysis_cutoff,
         )
+        if (
+            normalized_mode == "close"
+            and _parse_aware_cutoff(normalized_cutoff) > _now_vietnam()
+        ):
+            raise ValueError(
+                "the requested 15:00 close is not completed yet; "
+                "use an earlier date or live analysis"
+            )
         normalized = tuple(selected_analysts)
         unknown = set(normalized) - set(ANALYST_STAGES)
         if unknown:
@@ -966,7 +979,7 @@ class StageSession:
 
 
 _STAGE_STATE_KEYS = {
-    "market": ("market_report",),
+    "market": ("market_report", "market_price_reference"),
     "sentiment": ("sentiment_report", "sentiment_source_metadata"),
     "news": ("news_report", "news_source_metadata"),
     "fundamentals": ("fundamentals_report",),

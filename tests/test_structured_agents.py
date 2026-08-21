@@ -94,6 +94,9 @@ class TestNullishFloatCoercion:
             executive_summary="s",
             investment_thesis="t",
             price_target="N/A",
+            price_target_currency="USD",
+            price_target_rationale=None,
+            price_target_unavailable_reason="Insufficient evidence.",
         )
         assert d.price_target is None
 

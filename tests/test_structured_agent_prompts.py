@@ -88,6 +88,10 @@ def test_portfolio_manager_prompt_states_constraint():
             rating=PortfolioRating.HOLD,
             executive_summary="x",
             investment_thesis="y",
+            price_target=None,
+            price_target_currency="USD",
+            price_target_rationale=None,
+            price_target_unavailable_reason="Insufficient evidence.",
         ),
     )
     risk = {
@@ -98,6 +102,17 @@ def test_portfolio_manager_prompt_states_constraint():
     }
     create_portfolio_manager(llm)({
         "company_of_interest": "NVDA",
+        "analysis_cutoff": "2026-01-15T15:00:00+07:00",
+        "market_price_reference": {
+            "status": "available",
+            "ticker": "NVDA",
+            "close": "100",
+            "currency": "USD",
+            "price_unit": "USD",
+            "session_date": "2026-01-15",
+            "analysis_cutoff": "2026-01-15T15:00:00+07:00",
+            "point_in_time_quality": "exact",
+        },
         "risk_debate_state": risk,
         "investment_plan": "plan",
         "trader_investment_plan": "trader plan",

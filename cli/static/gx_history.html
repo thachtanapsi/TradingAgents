@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="vi" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="tradingagents-ui-token" content="__UI_TOKEN__">
+  <title>Trading Session Viewer · TradingAgents GX</title>
+  <link rel="stylesheet" href="/static/gx_history.css?v=5">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Về trang phân tích TradingAgents GX">
+      <span class="brand-mark" aria-hidden="true">TA</span>
+      <span><strong>Lịch sử Research</strong><small>TradingAgents GX</small></span>
+    </a>
+    <nav class="top-actions" aria-label="Điều hướng chính">
+      <a class="top-link" href="/">Trang Research</a>
+      <button id="print-button" class="icon-button" type="button" title="In research đang mở" aria-label="In research đang mở">⌁</button>
+      <button id="theme-button" class="icon-button" type="button" title="Đổi giao diện sáng hoặc tối" aria-label="Đổi giao diện sáng hoặc tối">◐</button>
+    </nav>
+  </header>
+
+  <main>
+    <header class="page-heading">
+      <div>
+        <p class="eyebrow">RESEARCH ARCHIVE</p>
+        <h1>Lịch sử Research</h1>
+        <p>Tìm kiếm và xem lại các phiên đã lưu mà không gọi lại GX, LLM hoặc nguồn dữ liệu bên ngoài.</p>
+      </div>
+      <div class="page-heading-actions">
+        <button id="refresh-button" class="button" type="button">Làm mới</button>
+        <a class="button primary" href="/">Phân tích mới</a>
+      </div>
+    </header>
+
+    <div id="page-notice" class="notice is-hidden" role="status" aria-live="polite"></div>
+
+    <div class="history-layout">
+      <aside id="history-panel" class="history-panel" aria-label="Danh sách lịch sử research">
+        <form id="filter-form" class="filters" novalidate>
+          <label class="field search-field" for="query">
+            <span>Ticker hoặc Run ID</span>
+            <input id="query" name="query" maxlength="64" autocomplete="off" spellcheck="false" placeholder="CTG">
+          </label>
+          <div class="filter-grid">
+            <label class="field" for="from-date"><span>Từ ngày</span><input id="from-date" name="from" type="date"></label>
+            <label class="field" for="to-date"><span>Đến ngày</span><input id="to-date" name="to" type="date"></label>
+            <label class="field" for="mode-filter">
+              <span>Chế độ</span>
+              <select id="mode-filter" name="mode">
+                <option value="">Tất cả</option>
+                <option value="close">Close 15:00</option>
+                <option value="live">Live</option>
+              </select>
+            </label>
+            <label class="field" for="status-filter">
+              <span>Trạng thái</span>
+              <select id="status-filter" name="status">
+                <option value="">Tất cả</option>
+                <option value="completed">Hoàn tất</option>
+                <option value="running">Đang chạy</option>
+                <option value="partial">Một phần</option>
+                <option value="failed">Thất bại</option>
+                <option value="not_started">Chưa chạy</option>
+              </select>
+            </label>
+          </div>
+          <button class="button primary filter-button" type="submit">Tìm kiếm</button>
+        </form>
+
+        <div class="list-heading">
+          <div><strong id="result-count">Đang tải…</strong><small id="skipped-count"></small></div>
+          <span id="page-label"></span>
+        </div>
+        <div id="history-list" class="history-list" aria-live="polite"></div>
+        <div id="list-empty" class="list-empty is-hidden">Không có research phù hợp bộ lọc.</div>
+        <nav class="pagination" aria-label="Phân trang lịch sử">
+          <button id="previous-page" class="page-button" type="button" aria-label="Trang trước">←</button>
+          <span id="pagination-label">Trang 1 / 1</span>
+          <button id="next-page" class="page-button" type="button" aria-label="Trang sau">→</button>
+        </nav>
+      </aside>
+
+      <section id="viewer-empty" class="viewer-empty">
+        <span aria-hidden="true">◎</span>
+        <h2>Chọn một phiên Research</h2>
+        <p>Dùng danh sách bên trái để mở báo cáo, kế hoạch, tranh luận Agent và provenance đã lưu.</p>
+      </section>
+
+      <article id="viewer" class="viewer is-hidden" aria-live="polite">
+        <section class="research-hero">
+          <div class="status-line"><span id="status-dot" class="status-dot"></span><span id="run-status">—</span></div>
+          <div class="hero-row">
+            <div>
+              <h2 id="hero-ticker">—</h2>
+              <p id="company-name">Báo cáo phân tích đầu tư</p>
+            </div>
+            <div id="hero-meta" class="hero-meta"></div>
+          </div>
+        </section>
+
+        <div class="viewer-layout">
+          <aside class="section-sidebar">
+            <p>Nội dung</p>
+            <nav id="section-nav" class="section-nav" aria-label="Các phần của research"></nav>
+            <div id="run-info" class="run-info"></div>
+          </aside>
+          <div id="report-content" class="report-content"></div>
+        </div>
+      </article>
+    </div>
+  </main>
+
+  <footer>TradingAgents GX · Lịch sử Research chỉ đọc · Không gửi lệnh giao dịch thật</footer>
+  <script src="/static/gx_history.js?v=7" defer></script>
+</body>
+</html>

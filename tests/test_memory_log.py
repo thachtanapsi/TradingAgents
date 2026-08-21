@@ -63,6 +63,18 @@ def _make_pm_state(past_context=""):
     """Minimal AgentState dict for portfolio_manager_node."""
     return {
         "company_of_interest": "NVDA",
+        "analysis_cutoff": "2026-01-10T15:00:00+07:00",
+        "market_price_reference": {
+            "status": "available",
+            "ticker": "NVDA",
+            "close": "200",
+            "currency": "USD",
+            "price_unit": "USD",
+            "session_date": "2026-01-10",
+            "analysis_cutoff": "2026-01-10T15:00:00+07:00",
+            "source": "test",
+            "point_in_time_quality": "exact",
+        },
         "past_context": past_context,
         "risk_debate_state": {
             "history": "Risk debate history.",
@@ -93,6 +105,10 @@ def _structured_pm_llm(captured: dict, decision: PortfolioDecision | None = None
             rating=PortfolioRating.HOLD,
             executive_summary="Hold the position; await catalyst.",
             investment_thesis="Balanced view; neither side carried the debate.",
+            price_target=None,
+            price_target_currency="USD",
+            price_target_rationale=None,
+            price_target_unavailable_reason="Insufficient valuation evidence.",
         )
     structured = MagicMock()
     structured.invoke.side_effect = lambda prompt: (
@@ -715,6 +731,9 @@ class TestPortfolioManagerInjection:
             executive_summary="Build position gradually over the next two weeks.",
             investment_thesis="AI capex cycle remains intact; institutional flows constructive.",
             price_target=215.0,
+            price_target_currency="USD",
+            price_target_rationale="Forward earnings and peer multiple support the target.",
+            price_target_unavailable_reason=None,
             time_horizon="3-6 months",
         )
         llm = _structured_pm_llm(captured, decision)
@@ -724,7 +743,8 @@ class TestPortfolioManagerInjection:
         assert "**Rating**: Overweight" in md
         assert "**Executive Summary**: Build position gradually" in md
         assert "**Investment Thesis**: AI capex cycle" in md
-        assert "**Price Target**: 215.0" in md
+        assert "**Price Target**: 215" in md
+        assert "**Price Target Currency**: USD" in md
         assert "**Time Horizon**: 3-6 months" in md
 
     def test_pm_falls_back_to_freetext_when_structured_unavailable(self):
@@ -737,7 +757,10 @@ class TestPortfolioManagerInjection:
         llm.invoke.return_value = MagicMock(content=plain_response)
         pm_node = create_portfolio_manager(llm)
         result = pm_node(_make_pm_state())
-        assert result["final_trade_decision"] == plain_response
+        decision = result["final_trade_decision"]
+        assert plain_response in decision
+        assert "**Price Target Status**: Unavailable" in decision
+        assert "**Price Target Unavailable Reason**:" in decision
 
     # get_past_context ordering and limits
 

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="tradingagents-ui-token" content="__UI_TOKEN__">
+  <title>Research · TradingAgents GX</title>
+  <link rel="stylesheet" href="/static/gx_dashboard.css?v=4">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="TradingAgents GX home">
+      <span class="brand-mark" aria-hidden="true">TA</span>
+      <span><strong>TradingAgents</strong><small>GX Vietnam research workspace</small></span>
+    </a>
+    <div class="top-actions">
+      <a class="history-link" href="/history">Lịch sử Research</a>
+      <div class="local-badge"><span></span> Local only · 127.0.0.1</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">MULTI-AGENT EQUITY ANALYSIS</p>
+        <h1>Phân tích cổ phiếu,<br><em>từ dữ liệu đến quyết định.</em></h1>
+        <p class="hero-note">GX market data, báo chí Việt Nam, FireAnt và NSO/SBV được tổng hợp qua pipeline độc lập, có kiểm soát point-in-time.</p>
+      </div>
+
+      <form id="run-form" class="run-card" novalidate>
+        <div class="run-card-head">
+          <div><span class="step">01</span><h2>Bắt đầu phân tích</h2></div>
+          <span class="cost-note">Chỉ chạy khi bấm nút</span>
+        </div>
+        <label class="field-label" for="ticker">Mã cổ phiếu</label>
+        <div class="ticker-row">
+          <input id="ticker" name="ticker" maxlength="16" autocomplete="off" spellcheck="false" placeholder="FPT" value="FPT" aria-describedby="ticker-help">
+          <button id="run-button" type="submit"><span>Chạy phân tích</span><b aria-hidden="true">→</b></button>
+        </div>
+        <small id="ticker-help">HOSE, HNX hoặc UPCoM · ví dụ FPT, HPG, CTG</small>
+
+        <fieldset class="mode-field">
+          <legend>Thời điểm dữ liệu</legend>
+          <div class="segmented">
+            <label><input type="radio" name="mode" value="close" checked><span>Đóng cửa 15:00</span></label>
+            <label><input type="radio" name="mode" value="live"><span>Live · as-of-now</span></label>
+          </div>
+        </fieldset>
+
+        <div id="date-wrap" class="date-wrap">
+          <label class="field-label" for="analysis-date">Ngày phân tích</label>
+          <input id="analysis-date" type="date" value="__DEFAULT_DATE__">
+        </div>
+        <label id="collect-wrap" class="check-row is-hidden">
+          <input id="collect-evidence" type="checkbox">
+          <span><b>Thu thập evidence trước khi chạy</b><small>CafeF/VnExpress rồi FireAnt; cutoff được khóa sau khi collect.</small></span>
+        </label>
+        <label id="hosted-confirm-wrap" class="check-row is-hidden">
+          <input id="confirm-hosted-cost" type="checkbox">
+          <span><b>Xác nhận sử dụng hosted LLM</b><small id="hosted-profile">Hosted API có thể phát sinh chi phí theo nhà cung cấp.</small></span>
+        </label>
+        <p id="form-error" class="form-error" role="alert"></p>
+      </form>
+    </section>
+
+    <section id="workspace" class="workspace is-hidden" aria-live="polite">
+      <div class="section-heading">
+        <div><span class="step">02</span><p class="eyebrow">PIPELINE STATUS</p><h2>Tiến trình phân tích</h2></div>
+        <div id="run-identity" class="run-identity"></div>
+      </div>
+      <div class="progress-shell">
+        <div id="progress-list" class="progress-list"></div>
+        <div class="progress-footer">
+          <div class="progress-track"><span id="progress-bar"></span></div>
+          <span id="progress-count">0 / 7 hoàn tất</span>
+        </div>
+      </div>
+      <div id="run-warning" class="notice is-hidden"></div>
+    </section>
+
+    <section id="results" class="results is-hidden">
+      <div class="section-heading">
+        <div><span class="step">03</span><p class="eyebrow">DECISION SUMMARY</p><h2>Kết quả tổng hợp</h2></div>
+        <p id="result-cutoff" class="cutoff"></p>
+      </div>
+
+      <div class="summary-grid">
+        <article class="summary-card action-card"><span>Khuyến nghị</span><strong id="summary-action">Unavailable</strong><small id="summary-rating">Chưa có quyết định cuối</small></article>
+        <article class="summary-card"><span>Confidence</span><strong id="summary-confidence">Unavailable</strong><small id="confidence-source">Không suy diễn khi thiếu</small></article>
+        <article class="summary-card"><span>Giá mục tiêu</span><strong id="summary-target">Unavailable</strong><small id="target-source">Chỉ hiển thị target đã xác thực</small></article>
+        <article class="summary-card"><span>Mức rủi ro</span><strong id="summary-risk">Unavailable</strong><small>Không suy diễn từ hành động</small></article>
+      </div>
+
+      <article class="chart-card">
+        <div class="card-heading"><div><p class="eyebrow">GX MARKET DATA</p><h3>Giá đóng cửa lịch sử</h3></div><div class="chart-legend"><span class="close-dot"></span>Close (VND)<span class="target-line"></span>Target trong báo cáo</div></div>
+        <div id="chart-empty" class="empty-state">Chưa có dữ liệu biểu đồ.</div>
+        <svg id="price-chart" class="price-chart is-hidden" role="img" aria-label="Biểu đồ giá đóng cửa lịch sử từ GX"></svg>
+        <p class="chart-note">Đây là giá lịch sử, không phải đường dự báo. Target chỉ được vẽ khi đã xác thực và cùng đơn vị tiền tệ với biểu đồ.</p>
+      </article>
+
+      <div class="report-card">
+        <nav id="tabs" class="tabs" aria-label="Các báo cáo phân tích">
+          <button type="button" data-tab="technical" class="active">Technical</button>
+          <button type="button" data-tab="fundamental">Fundamental</button>
+          <button type="button" data-tab="news">News & Sentiment</button>
+          <button type="button" data-tab="agents">Agents</button>
+          <button type="button" data-tab="risk">Risk</button>
+        </nav>
+        <div id="tab-content" class="tab-content"></div>
+      </div>
+
+      <article class="final-card">
+        <div class="card-heading"><div><p class="eyebrow">PORTFOLIO MANAGER</p><h3>Final analysis</h3></div><span id="final-status" class="final-status">Unavailable</span></div>
+        <pre id="final-analysis">Chưa có quyết định cuối cùng.</pre>
+      </article>
+    </section>
+  </main>
+
+  <footer>TradingAgents GX · Research support only · Không gửi lệnh giao dịch thật</footer>
+  <script src="/static/gx_dashboard.js?v=7" defer></script>
+</body>
+</html>

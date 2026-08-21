@@ -18,6 +18,7 @@ so that:
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Literal
 
@@ -27,7 +28,18 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # numeric field instead of omitting it. Coerce those to None so the structured
 # call validates instead of erroring (#1058). Pydantic still parses real numeric
 # strings ("189.5") to float.
-_NULLISH_FLOAT = {"", "none", "n/a", "na", "null", "nil", "-", "tbd", "unknown"}
+_NULLISH_FLOAT = {
+    "",
+    "none",
+    "n/a",
+    "na",
+    "null",
+    "nil",
+    "-",
+    "tbd",
+    "unknown",
+    "unavailable",
+}
 
 
 def _coerce_optional_float(value):
@@ -214,8 +226,32 @@ class PortfolioDecision(BaseModel):
         ),
     )
     price_target: float | None = Field(
-        default=None,
-        description="Optional target price in the instrument's quote currency.",
+        ...,
+        description=(
+            "Required nullable target price in the instrument's quote currency. "
+            "Return null when the supplied evidence cannot support a defensible target."
+        ),
+    )
+    price_target_currency: str | None = Field(
+        ...,
+        description=(
+            "Required nullable ISO-style quote currency such as VND or USD. It must "
+            "be present whenever price_target is numeric."
+        ),
+    )
+    price_target_rationale: str | None = Field(
+        ...,
+        description=(
+            "Required nullable concise valuation basis for a numeric target. It must "
+            "be null when price_target is null."
+        ),
+    )
+    price_target_unavailable_reason: str | None = Field(
+        ...,
+        description=(
+            "Required nullable reason a defensible target is unavailable. It must be "
+            "present exactly when price_target is null."
+        ),
     )
     time_horizon: str | None = Field(
         default=None,
@@ -226,6 +262,55 @@ class PortfolioDecision(BaseModel):
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
+
+    @field_validator("price_target")
+    @classmethod
+    def _positive_finite_price_target(cls, value):
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            raise ValueError("price_target must be a positive finite number or null")
+        return value
+
+    @field_validator("price_target_currency", mode="before")
+    @classmethod
+    def _normalize_price_target_currency(cls, value):
+        if value is None:
+            return None
+        text = str(value).strip()
+        if text.lower() in _NULLISH_FLOAT:
+            return None
+        if not text.isalpha() or not 2 <= len(text) <= 12:
+            raise ValueError("price_target_currency must be an alphabetic currency code")
+        return text.upper()
+
+    @field_validator("price_target_rationale", "price_target_unavailable_reason")
+    @classmethod
+    def _normalize_target_explanation(cls, value):
+        if value is None:
+            return None
+        text = value.strip()
+        if not text:
+            raise ValueError("price-target explanation must not be empty")
+        return text
+
+    @model_validator(mode="after")
+    def _target_contract_is_complete(self):
+        if self.price_target is not None:
+            if self.price_target_currency is None:
+                raise ValueError("numeric price_target requires price_target_currency")
+            if self.price_target_rationale is None:
+                raise ValueError("numeric price_target requires price_target_rationale")
+            if self.price_target_unavailable_reason is not None:
+                raise ValueError(
+                    "numeric price_target cannot have price_target_unavailable_reason"
+                )
+        else:
+            if self.price_target_rationale is not None:
+                raise ValueError("null price_target cannot have price_target_rationale")
+            if self.price_target_unavailable_reason is None:
+                raise ValueError(
+                    "null price_target requires price_target_unavailable_reason"
+                )
+        return self
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -243,8 +328,22 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
     ]
-    if decision.price_target is not None:
-        parts.extend(["", f"**Price Target**: {decision.price_target}"])
+    target_status = "Available" if decision.price_target is not None else "Unavailable"
+    parts.extend(
+        [
+            "",
+            f"**Price Target Status**: {target_status}",
+            "",
+            f"**Price Target**: {decision.price_target if decision.price_target is not None else 'Unavailable'}",
+            "",
+            f"**Price Target Currency**: {decision.price_target_currency or 'Unavailable'}",
+            "",
+            f"**Price Target Rationale**: {decision.price_target_rationale or 'Unavailable'}",
+            "",
+            "**Price Target Unavailable Reason**: "
+            f"{decision.price_target_unavailable_reason or 'Unavailable'}",
+        ]
+    )
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
     return "\n".join(parts)

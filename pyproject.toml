@@ -70,6 +70,7 @@ vn-macro = [
 [project.scripts]
 tradingagents = "cli.main:app"
 tradingagents-gx = "cli.gx_main:app"
+tradingagents-gx-ui = "cli.gx_ui:main"
 
 [tool.setuptools.packages.find]
 include = ["tradingagents*", "cli*"]

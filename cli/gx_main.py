@@ -1150,9 +1150,14 @@ def _safe_runtime_error(exc: Exception) -> str:
         "GX_MARKET_INFO_TV_TOKEN",
         "GX_ANALYSIS_DATA_API_KEY",
         "GX_MARKET_INFO_DATABASE_URL",
+        "GX_MARKET_INFO_POSTGRES_DSN",
+        "GX_TRADINGVIEW_API_KEY",
         "FIREANT_ACCESS_TOKEN",
         "FIREANT_ARCHIVE_ENCRYPTION_KEY",
         "VN_MEDIA_ARCHIVE_ENCRYPTION_KEY",
+        "FRED_API_KEY",
+        "ALPHA_VANTAGE_API_KEY",
+        "AWS_BEARER_TOKEN_BEDROCK",
     }
     for name in secret_names:
         secret = os.environ.get(name)

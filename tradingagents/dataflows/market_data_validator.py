@@ -11,6 +11,7 @@ claim. Deterministic, no LLM involved.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import pandas as pd
@@ -48,6 +49,70 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     if df.empty:
         raise ValueError(f"No OHLCV rows on or before {curr_date} for {symbol}.")
     return df
+
+
+def get_verified_price_reference(symbol: str, curr_date: str) -> dict[str, Any]:
+    """Return the frozen completed-session close used to validate a price target.
+
+    This deliberately reuses the same strict OHLCV path as the verified market
+    snapshot. It never uses a live quote, wall clock, or an LLM report, so a
+    resumed run validates against the original analysis cutoff.
+    """
+    df = _verified_rows(symbol, curr_date)
+    latest = df.iloc[-1]
+    try:
+        price = Decimal(str(latest.get("Close")))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"No positive finite completed-session close for {symbol}."
+        ) from exc
+    if not price.is_finite() or price <= 0:
+        raise ValueError(f"No positive finite completed-session close for {symbol}.")
+
+    provenance = df.attrs.get("gx_provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    currency = provenance.get("currency") or df.attrs.get("currency")
+    price_unit = provenance.get("price_unit") or df.attrs.get("price_unit")
+    from tradingagents.dataflows.config import get_config
+
+    config = get_config()
+    vendor = config.get("tool_vendors", {}).get(
+        "get_stock_data",
+        config.get("data_vendors", {}).get("core_stock_apis", "yfinance"),
+    )
+    configured_vendors = [
+        item.strip() for item in str(vendor).split(",") if item.strip()
+    ]
+    sole_gx_vendor = configured_vendors == ["gx_market_info"]
+    # With a fallback chain, an unprovenanced frame could have come from
+    # Yahoo/another vendor. Never label it VND/exact merely because GX appears
+    # somewhere in the configured chain. A sole GX route is deterministic and
+    # may safely restore metadata lost by benign pandas transformations.
+    if sole_gx_vendor:
+        if not currency:
+            currency = "VND"
+        if not price_unit:
+            price_unit = "VND"
+
+    normalized_price = format(price.normalize(), "f")
+    if "." in normalized_price:
+        normalized_price = normalized_price.rstrip("0").rstrip(".")
+
+    return {
+        "status": "available",
+        "ticker": str(symbol).strip().upper(),
+        "close": normalized_price,
+        "currency": str(currency).strip().upper() if currency else None,
+        "price_unit": str(price_unit).strip() if price_unit else None,
+        "session_date": pd.Timestamp(latest["Date"]).date().isoformat(),
+        "analysis_cutoff": str(curr_date),
+        "source": provenance.get(
+            "source", "gx_market_info" if sole_gx_vendor else "unprovenanced_ohlcv"
+        ),
+        "point_in_time_quality": provenance.get(
+            "point_in_time_quality", "exact" if sole_gx_vendor else "partial"
+        ),
+    }
 
 
 def _fmt(value) -> str:

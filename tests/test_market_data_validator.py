@@ -23,6 +23,65 @@ def _sample_ohlcv() -> pd.DataFrame:
 
 @pytest.mark.unit
 class TestVerifiedSnapshot:
+    def test_price_reference_is_completed_close_with_pit_provenance(
+        self, monkeypatch
+    ):
+        data = _sample_ohlcv()
+        data.attrs["gx_provenance"] = {
+            "source": "gx_market_info",
+            "currency": "VND",
+            "price_unit": "VND",
+            "point_in_time_quality": "exact",
+        }
+        monkeypatch.setattr(validator, "load_ohlcv", lambda _s, _d: data)
+
+        reference = validator.get_verified_price_reference(
+            "mwg", "2026-05-13T10:00:00+07:00"
+        )
+
+        assert reference == {
+            "status": "available",
+            "ticker": "MWG",
+            "close": "130",
+            "currency": "VND",
+            "price_unit": "VND",
+            "session_date": "2026-05-13",
+            "analysis_cutoff": "2026-05-13T10:00:00+07:00",
+            "source": "gx_market_info",
+            "point_in_time_quality": "exact",
+        }
+
+    def test_price_reference_rejects_nonpositive_close(self, monkeypatch):
+        data = _sample_ohlcv()
+        data.loc[data.index[-1], "Close"] = 0
+        monkeypatch.setattr(validator, "load_ohlcv", lambda _s, _d: data)
+
+        with pytest.raises(ValueError, match="positive finite"):
+            validator.get_verified_price_reference("MWG", "2026-05-20")
+
+    def test_unprovenanced_fallback_frame_is_not_mislabeled_gx_exact(
+        self, monkeypatch
+    ):
+        data = _sample_ohlcv()
+        data["Close"] = data["Close"].astype(float)
+        data.loc[data.index[-1], "Close"] = 63.3
+        monkeypatch.setattr(validator, "load_ohlcv", lambda _s, _d: data)
+        monkeypatch.setattr(
+            "tradingagents.dataflows.config.get_config",
+            lambda: {
+                "tool_vendors": {
+                    "get_stock_data": "gx_market_info,yfinance",
+                }
+            },
+        )
+
+        reference = validator.get_verified_price_reference("MWG", "2026-05-20")
+
+        assert reference["close"] == "63.3"
+        assert reference["currency"] is None
+        assert reference["price_unit"] is None
+        assert reference["point_in_time_quality"] == "partial"
+
     def test_excludes_future_rows(self, monkeypatch):
         data = pd.concat([
             _sample_ohlcv(),

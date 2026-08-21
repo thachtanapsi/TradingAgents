@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -36,7 +37,10 @@ def test_session_round_trip_and_version(tmp_path):
 
 def test_replacing_upstream_stage_invalidates_downstream_outputs():
     session = _session()
-    session.complete("market", {"market_report": "v1"})
+    session.complete(
+        "market",
+        {"market_report": "v1", "market_price_reference": {"close": "63000"}},
+    )
     session.complete("fundamentals", {"fundamentals_report": "fundamentals"})
     session.complete(
         "research",
@@ -47,10 +51,14 @@ def test_replacing_upstream_stage_invalidates_downstream_outputs():
         "risk", {"final_trade_decision": "hold", "risk_debate_state": {"history": "risk"}}
     )
 
-    session.complete("market", {"market_report": "v2"})
+    session.complete(
+        "market",
+        {"market_report": "v2", "market_price_reference": {"close": "64000"}},
+    )
 
     assert session.completed_stages == ["market", "fundamentals"]
     assert session.state["market_report"] == "v2"
+    assert session.state["market_price_reference"] == {"close": "64000"}
     assert "investment_plan" not in session.state
     assert "trader_investment_plan" not in session.state
     assert "final_trade_decision" not in session.state
@@ -146,7 +154,10 @@ def test_session_rejects_credential_bearing_public_endpoints(field, value):
 
 def test_failed_rerun_removes_stale_stage_and_downstream_outputs():
     session = _session()
-    session.complete("market", {"market_report": "old"})
+    session.complete(
+        "market",
+        {"market_report": "old", "market_price_reference": {"close": "63000"}},
+    )
     session.complete("research", {"investment_plan": "old plan"})
     session.complete("trader", {"trader_investment_plan": "old trade"})
 
@@ -156,6 +167,7 @@ def test_failed_rerun_removes_stale_stage_and_downstream_outputs():
     assert session.stage_status["research"] == "not_run"
     assert session.stage_status["trader"] == "not_run"
     assert "market_report" not in session.state
+    assert "market_price_reference" not in session.state
     assert "investment_plan" not in session.state
     assert "trader_investment_plan" not in session.state
 
@@ -344,6 +356,22 @@ def test_close_mode_rejects_non_close_cutoff():
             analysis_date="2026-08-12",
             analysis_mode="close",
             analysis_cutoff="2026-08-12T16:00:00+07:00",
+            llm={"provider": "fake"},
+            data_transport={"transport": "api"},
+        )
+
+
+def test_fresh_close_run_rejects_a_cutoff_that_has_not_completed(monkeypatch):
+    monkeypatch.setattr(
+        "tradingagents.graph.stage_session._now_vietnam",
+        lambda: datetime(
+            2026, 8, 19, 10, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh")
+        ),
+    )
+    with pytest.raises(ValueError, match="close is not completed"):
+        StageSession.create(
+            ticker="HPG",
+            analysis_date="2026-08-19",
             llm={"provider": "fake"},
             data_transport={"transport": "api"},
         )

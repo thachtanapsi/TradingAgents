@@ -59,6 +59,10 @@ class AgentState(MessagesState):
         str,
         "Execution-only deterministic OHLCV/indicator snapshot for live market analysis",
     ]
+    market_price_reference: Annotated[
+        dict,
+        "Frozen completed-daily-close reference used to validate the final price target",
+    ]
     media_profile: Annotated[
         dict, "Immutable non-secret Vietnam editorial media run profile"
     ]

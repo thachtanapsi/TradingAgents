@@ -283,6 +283,20 @@ def test_live_market_snapshot_is_prefetched_once_before_model_rounds(
         "tradingagents.graph.stage_runner.build_verified_market_snapshot",
         snapshot,
     )
+    monkeypatch.setattr(
+        "tradingagents.graph.stage_runner.get_verified_price_reference",
+        lambda ticker, cutoff: {
+            "status": "available",
+            "ticker": ticker,
+            "close": "63300",
+            "currency": "VND",
+            "price_unit": "VND",
+            "session_date": "2026-08-19",
+            "analysis_cutoff": cutoff,
+            "source": "gx_market_info",
+            "point_in_time_quality": "exact",
+        },
+    )
 
     class RecordingToolNode:
         def invoke(self, _state, *, runtime=None):
@@ -345,6 +359,80 @@ def test_live_market_snapshot_is_prefetched_once_before_model_rounds(
     ]
     assert calls == 2
     assert "verified_market_snapshot" not in session.state
+    assert session.state["market_price_reference"]["close"] == "63300"
+
+
+def test_market_price_reference_is_persisted_and_risk_does_not_refetch(
+    runner, monkeypatch
+):
+    reference_calls = []
+
+    def reference(ticker, cutoff):
+        reference_calls.append((ticker, cutoff))
+        return {
+            "status": "available",
+            "ticker": ticker,
+            "close": "63300",
+            "currency": "VND",
+            "price_unit": "VND",
+            "session_date": "2026-08-12",
+            "analysis_cutoff": cutoff,
+            "source": "gx_market_info",
+            "point_in_time_quality": "exact",
+        }
+
+    monkeypatch.setattr(
+        "tradingagents.graph.stage_runner.get_verified_price_reference", reference
+    )
+    monkeypatch.setattr(
+        "tradingagents.graph.stage_runner.create_market_analyst",
+        lambda _llm: lambda _state: {
+            "messages": [AIMessage(content="done")],
+            "market_report": "market report",
+        },
+    )
+    stage_runner = TradingAgentsStageRunner(
+        config=runner.config,
+        graph_factory=FakeGraph,
+    )
+    stage_runner._graph(("market",)).tool_nodes["market"] = object()
+    session = stage_runner.create_session(
+        "MWG", "2026-08-12", selected_analysts=("market",)
+    )
+    stage_runner.run_stage(session, "market")
+
+    assert reference_calls == [("MWG", "2026-08-12T15:00:00+07:00")]
+    assert session.state["market_price_reference"]["close"] == "63300"
+    reloaded = type(session).load(session.path())
+    assert reloaded.state["market_price_reference"] == session.state[
+        "market_price_reference"
+    ]
+
+    # Build valid downstream prerequisites without invoking an LLM, then prove
+    # Risk consumes the persisted reference without touching the market source.
+    reloaded.complete(
+        "research",
+        {"investment_debate_state": {"history": "debate"}, "investment_plan": "plan"},
+    )
+    reloaded.complete("trader", {"trader_investment_plan": "trade"})
+    captured = {}
+
+    class CaptureRiskRunner(TradingAgentsStageRunner):
+        def _run_risk(self, _session, state):
+            captured["reference"] = state["market_price_reference"]
+            return {
+                "risk_debate_state": {"history": "risk"},
+                "final_trade_decision": "hold",
+            }
+
+    risk_runner = CaptureRiskRunner(config=runner.config, graph_factory=FakeGraph)
+    monkeypatch.setattr(
+        "tradingagents.graph.stage_runner.get_verified_price_reference",
+        lambda *_args, **_kwargs: pytest.fail("Risk must not refetch market data"),
+    )
+    risk_runner.run_stage(reloaded, "risk")
+
+    assert captured["reference"]["analysis_cutoff"] == reloaded.analysis_cutoff
 
 
 def test_session_does_not_persist_langchain_messages(runner):
@@ -395,14 +483,16 @@ def test_research_hydrates_missing_unavailable_analyst_report(runner):
 
 def test_failure_text_redacts_credentials(monkeypatch):
     monkeypatch.setenv("GX_ANALYSIS_DATA_API_KEY", "super-secret")
+    monkeypatch.setenv("FRED_API_KEY", "fred-secret-canary")
     error = RuntimeError(
         "https://user:pass@example.test/x?token=super-secret "
-        "postgresql://gdev:Apg@161VVT@db.internal/market"
+        "postgresql://gdev:Apg@161VVT@db.internal/market fred-secret-canary"
     )
     safe = TradingAgentsStageRunner._safe_error(error)
     assert "user:pass" not in safe
     assert "super-secret" not in safe
     assert "Apg@161VVT" not in safe
+    assert "fred-secret-canary" not in safe
 
 
 def test_sentiment_and_news_metadata_warnings_are_redacted(monkeypatch):
